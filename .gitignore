@@ -23,3 +23,6 @@ OllamaSetup.exe
 AutomationLog.txt
 motion-preview.html
 motion-preview*
+
+# reference artwork (not part of the app)
+halftone-sphere-*
