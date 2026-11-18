@@ -105,6 +105,18 @@ class Logger:
 
 
 def run(goal: str, cfg: Config | None = None) -> str:
+    """Run a task. Safe to call from any thread (GUI / tray worker threads included).
+
+    UI Automation needs COM initialised on the calling thread; without it every
+    perception call fails with "CoInitialize has not been called" and the agent never
+    sees the screen. The initializer is entered here so every caller is covered.
+    """
+    import uiautomation as _auto
+    with _auto.UIAutomationInitializerInThread():
+        return _run_impl(goal, cfg)
+
+
+def _run_impl(goal: str, cfg: Config | None = None) -> str:
     cfg = cfg or DEFAULT
 
     if cfg.backend == "vision":
