@@ -1,0 +1,147 @@
+﻿<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LocalPilot | Orb preview</title><style>
+*{box-sizing:border-box}
+:root{color-scheme:dark;font:15px Inter,"Segoe UI",sans-serif;color:#e9edf3;background:#101216}
+body{margin:0}
+main{width:min(620px,100%);margin:auto;padding:clamp(22px,5vh,52px) 24px}
+header,footer{display:flex;align-items:center;justify-content:space-between;gap:12px}
+header{padding-bottom:20px;border-bottom:1px solid #2a2d34}
+header strong{font-size:16px;letter-spacing:-.035em;font-weight:650}
+header small,#step,details{color:#a5aab6;font-size:12px}
+canvas{display:block;width:100%;height:clamp(210px,37vh,345px)}
+section{text-align:center;padding:0 0 20px}
+h1{font-size:clamp(27px,4vw,36px);letter-spacing:-.045em;font-weight:530;margin:0 0 6px}
+#desc{margin:7px 0;color:#aeb3bf;line-height:1.45}
+#step:empty{display:none}
+main>p{margin:18px 0 0}
+label{color:#aeb3bf;font-size:13px}
+button,select,input{font:inherit}
+select,button{border-radius:8px;border:1px solid #393e48;background:#1a1d23;color:#e8ebf2;padding:9px 13px}
+select{max-width:100%;margin-left:5px}
+button,summary{cursor:pointer}
+button:disabled{opacity:.36;cursor:default}
+button:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid #a9baff;outline-offset:3px}
+#start{background:#e3e8fa;color:#192039;font-weight:600;border-color:transparent}
+button:not(:disabled):hover{filter:brightness(1.13)}
+progress{display:block;width:100%;height:3px;border:0;background:#2c3039;accent-color:#a6b6f3}
+progress::-webkit-progress-bar{background:#2c3039}progress::-webkit-progress-value{background:#a6b6f3}
+footer{margin-top:16px}footer div{display:flex;gap:6px}
+details{margin-top:24px}input[type=number]{width:68px}input[type=file]{max-width:100%}
+</style><main><header><strong>LocalPilot</strong><small>Task preview</small></header><p><label>Task &nbsp;<select id="task"><option>Research a local AI model</option><option>Resolve a scheduling conflict</option><option>Organize project notes</option></select></label></p>
+<video id="reference" muted playsinline loop hidden style="width:100%;height:min(50vh,440px);object-fit:contain"></video><canvas aria-label="Virtual assistant orb"></canvas><section aria-live="polite"><h1 id="name"></h1><small id="step"></small><p id="desc"></p></section><progress id="meter" aria-label="Task progress"></progress><footer><button id="start">Run task</button><div><button id="pause">Pause</button> <button id="stop">Stop</button></div></footer><details><summary>Reference video</summary><p><label>Reference clip <input id="clip" type="file" accept="video/*"></label></p><p><label>Loop start (seconds) <input id="begin" type="number" min="0" value="0"></label> <label>Loop end <input id="end" type="number" min="0" placeholder="End of video"></label></p></details></main><script>
+const $=id=>document.getElementById(id);
+const tasks=[
+[[0,'Identify the model requirements'],[2,'Scan the example model cards'],[1,'Compare memory and speed'],[3,'Prepare a shortlist'],[4,'Check the shortlist against the requirements']],
+[[0,'Read the example schedule'],[1,'Find a slot that works for everyone'],[3,'Draft the revised schedule'],[4,'Check for overlapping meetings']],
+[[0,'Read the organization request'],[2,'Review the example notes'],[3,'Group notes by project'],[4,'Check that every note has a group']]
+];
+const names=['Thinking','Puzzle solving','Researching','Working','Verifying','Sleeping','Stopping','Stopped','Complete'];
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');
+const reduced=matchMedia('(prefers-reduced-motion: reduce)');
+let mode=5,visualMode=5,time=0,last=0,paused=false,index=0,elapsed=0;
+const stages=()=>tasks[$('task').selectedIndex];
+function render(){
+ const active=mode<5;
+ $('task').disabled=active||mode===6;
+ $('start').disabled=$('task').disabled;
+ $('pause').disabled=!active;$('stop').disabled=!active;
+ $('pause').textContent=paused?'Resume':'Pause';
+ $('name').textContent=paused?'Paused':names[mode];
+ $('desc').textContent=active?stages()[index][1]:({5:'Ready when you are.',6:'Winding down the current step…',7:'Run the task again when ready.',8:'Task preview complete.'})[mode];
+ $('step').textContent=active?'STEP '+(index+1)+' / '+stages().length:'';
+ $('meter').max=stages().length;$('meter').value=mode===8?stages().length:index;
+}
+const video=$('reference');
+let objectURL;
+function syncClip(){
+ if(!objectURL)return;
+ video.playbackRate=[.85,1,1.15,1.25,.8,1,.5,1,.75][mode];
+ if(paused||mode===7)video.pause();else video.play().catch(()=>{video.controls=true});
+}
+$('clip').onchange=()=>{
+ const file=$('clip').files[0];if(!file)return;
+ if(objectURL)URL.revokeObjectURL(objectURL);
+ objectURL=URL.createObjectURL(file);video.src=objectURL;video.hidden=false;video.controls=true;canvas.style.visibility='hidden';canvas.style.position='absolute';syncClip();
+};
+function loopStart(){return Math.max(0,Math.min(Number($('begin').value)||0,video.duration-.1))}
+$('begin').onchange=()=>{if(Number.isFinite(video.duration))video.currentTime=loopStart()};
+video.ontimeupdate=()=>{
+ const finish=Number($('end').value)||video.duration;
+ if(Number.isFinite(video.duration)&&(video.currentTime<loopStart()-.1||(finish>loopStart()&&video.currentTime>=finish)))video.currentTime=loopStart();
+};
+const palettes=[
+ ['#092350','#3765dc','#24daca','#efbafa'], ['#30205b','#ac52cc','#ff966f','#ffe0a3'],
+ ['#063849','#07979a','#75e9ff','#d3fff3'], ['#191d65','#4f66f1','#27d9ef','#edc8ff'],
+ ['#202652','#816dd7','#60e2c7','#dbffea'], ['#14214f','#5665cf','#46ceea','#f3bcfa'],
+ ['#41293d','#aa6577','#efa184','#ffdad2'], ['#25303e','#536574','#8297a3','#b9c8cb'],
+ ['#103f42','#208c89','#76e2ae','#e3ffe4']
+];
+let origin=palettes[5],blend=1,phase=0,activity=0;
+function mix(a,b,f){
+ return '#'+[1,3,5].map(i=>{
+   const x=parseInt(a.slice(i,i+2),16),y=parseInt(b.slice(i,i+2),16);
+   return Math.round(x+(y-x)*f).toString(16).padStart(2,'0');
+ }).join('');
+}
+function currentColors(){
+ const smooth=blend*blend*(3-2*blend);
+ return palettes[visualMode].map((color,i)=>mix(origin[i],color,smooth));
+}
+function enter(next){mode=next;elapsed=0;if(next!==7){origin=currentColors();visualMode=next;blend=reduced.matches?1:0;}render();syncClip()}
+$('start').onclick=()=>{index=0;paused=false;enter(stages()[0][0])};
+$('pause').onclick=()=>{paused=!paused;render();syncClip()};
+$('stop').onclick=()=>{paused=false;enter(7)};
+$('task').onchange=()=>{index=0;enter(5)};
+render();function draw(now){const dt=Math.min(.1,(now-last)/1000);if(!paused){elapsed+=dt;if(!reduced.matches && mode!==7)time+=dt;if(mode<5 && elapsed>=5){index++;enter(index===stages().length?8:stages()[index][0])}else if(mode===6 && elapsed>=1.4)enter(7)}last=now;let w=canvas.clientWidth,h=canvas.clientHeight,d=Math.min(devicePixelRatio,2);if(canvas.width!==Math.round(w*d)||canvas.height!==Math.round(h*d)){canvas.width=Math.round(w*d);canvas.height=Math.round(h*d)}ctx.setTransform(d,0,0,d,0,0);ctx.clearRect(0,0,w,h);ctx.translate(w/2,h/2);let r=Math.min(w*.28,h*.32),tau=2*Math.PI;
+
+const speed=[.72,1.1,.95,1.45,.58,.38,.3,0,.34][visualMode];
+if(!paused && mode!==7){
+ blend=Math.min(1,blend+dt/1.15);
+ if(!reduced.matches)phase+=dt*speed;
+ activity+=((visualMode<5 && !reduced.matches?1:0)-activity)*(1-Math.exp(-dt*4));
+}
+const colors=currentColors();
+const t=phase;
+const floatPhase = activity * (1 - Math.cos(time * Math.PI / 2)) / 2;
+const lift = -Math.min(4, r * .035) * floatPhase;
+const stretch = 1 + .018 * floatPhase;
+ctx.save();
+ctx.translate(0,r*1.22);ctx.scale(1,.085);
+const shadow=ctx.createRadialGradient(0,0,0,0,0,r*.73);
+shadow.addColorStop(0,'rgba(0,0,0,'+(.42-.09*floatPhase)+')');shadow.addColorStop(1,'transparent');
+ctx.fillStyle=shadow;ctx.fillRect(-r,-r,2*r,2*r);ctx.restore();
+ctx.translate(0, lift);
+ctx.scale(1 / stretch, stretch);
+video.style.transform = 'translateY(' + lift + 'px) scale(' + (1 / stretch) + ',' + stretch + ')';
+const size = r;
+ctx.save();
+ctx.beginPath();ctx.arc(0,0,size,0,tau);ctx.clip();
+ctx.fillStyle=colors[0];ctx.fillRect(-size,-size,size*2,size*2);
+function pool(x,y,radius,color){
+ const g=ctx.createRadialGradient(x,y,0,x,y,radius);
+ g.addColorStop(0,color);g.addColorStop(.38,color+'dc');g.addColorStop(1,color+'00');
+ ctx.fillStyle=g;ctx.fillRect(-size,-size,size*2,size*2);
+}
+for(let i=0;i<3;i++){
+ const angle=t*(.66+i*.12)+i*2.1;
+ pool(size*.67*Math.cos(angle),size*.62*Math.sin(angle*1.13),size*(1.36-i*.13),colors[i+1]);
+}
+const reflection=ctx.createRadialGradient(-size*.34,-size*.54,0,-size*.34,-size*.54,size*.94);
+reflection.addColorStop(0,'#f6f4ff79');reflection.addColorStop(.46,'#dfebff26');reflection.addColorStop(1,'#ffffff00');
+ctx.fillStyle=reflection;ctx.fillRect(-size,-size,size*2,size*2);
+const shade=ctx.createLinearGradient(0,-size,0,size);
+shade.addColorStop(0,'#13152b00');shade.addColorStop(.52,'#13152b00');shade.addColorStop(1,'#12142e86');
+ctx.fillStyle=shade;ctx.fillRect(-size,-size,size*2,size*2);
+const rim=ctx.createRadialGradient(-size*.28,-size*.33,size*.45,0,0,size);
+rim.addColorStop(0,'#09062100');rim.addColorStop(.88,'#09062112');rim.addColorStop(1,'#09062150');
+ctx.fillStyle=rim;ctx.fillRect(-size,-size,size*2,size*2);
+ctx.restore();requestAnimationFrame(draw)}requestAnimationFrame(draw)
+</script></html>
+
+
+
+
+
+
+
+
+

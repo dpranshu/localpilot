@@ -67,6 +67,8 @@ def _text_is_progress(action: dict, rect) -> bool:
         return rect is not None          # must reference a real on-screen element
     if k == "hotkey":
         return bool(action.get("keys"))
+    if k in ("open_app", "type_text"):
+        return True                      # these always do something concrete
     # scroll / wait / unknown are treated as non-progress (possible stall)
     return False
 
@@ -261,6 +263,10 @@ def _action_label(action: dict) -> str:
         return f"click [{action.get('id')}]"
     if k == "type":
         return f"type [{action.get('id')}] <- {str(action.get('text',''))[:24]}"
+    if k == "type_text":
+        return f"type_text <- {str(action.get('text',''))[:24]}"
+    if k == "open_app":
+        return f"open_app {action.get('name','')}"
     if k == "hotkey":
         return f"hotkey {action.get('keys','')}"
     if k == "scroll":

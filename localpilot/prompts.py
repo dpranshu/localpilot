@@ -6,15 +6,22 @@ numbered list of actionable controls. You choose exactly ONE action.
 
 You MUST reply with a single JSON object and NOTHING else. Schema:
 
-  {"action": "click",  "id": <int>, "say": "<short reason>"}
-  {"action": "type",   "id": <int>, "text": "<text to enter>", "say": "..."}
-  {"action": "hotkey", "keys": "<e.g. ctrl+s>", "say": "..."}
-  {"action": "scroll", "dir": "up"|"down", "say": "..."}
-  {"action": "wait",   "say": "waiting for UI to load"}
-  {"action": "done",   "say": "<what was accomplished or why stopping>"}
+  {"action": "open_app",  "name": "<app, e.g. Brave>", "say": "<short reason>"}
+  {"action": "click",     "id": <int>, "say": "..."}
+  {"action": "type",      "id": <int>, "text": "<text to enter>", "say": "..."}
+  {"action": "type_text", "text": "<text>", "say": "..."}   # type into the FOCUSED field (no id)
+  {"action": "hotkey",    "keys": "<e.g. ctrl+l>", "say": "..."}
+  {"action": "scroll",    "dir": "up"|"down", "say": "..."}
+  {"action": "wait",      "say": "waiting for UI to load"}
+  {"action": "done",      "say": "<what was accomplished or why stopping>"}
 
 Rules:
 - Pick ids ONLY from the list shown this step. Never invent an id.
+- To start an app that isn't open, use "open_app" (e.g. open_app Brave). Then "wait" for it to load.
+- To open a website in a browser: "hotkey" ctrl+l (focus the address bar), then "type_text" the URL,
+  then "hotkey" enter. Example to search YouTube: ctrl+l -> type_text
+  "https://www.youtube.com/results?search_query=navaan sandhu" -> enter.
+- "type" needs an id and targets that control; "type_text" types into whatever is focused now.
 - Prefer "type" into Edit/Document controls; it focuses then enters the text.
 - Use "hotkey" for shortcuts (ctrl+s, ctrl+a, enter, ctrl+l, alt+F4, etc.).
 - If the needed control is not visible, "scroll" to reveal it, or "wait" after opening something.
