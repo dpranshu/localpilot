@@ -48,13 +48,20 @@ class Orb:
         self.cmask = self.cmask_ss.resize((self.D, self.D), Image.LANCZOS)
 
         # glow canvas: sphere + a soft halo margin
-        self.M = max(12, int(self.D * 0.30))
+        self.M = max(16, int(self.D * 0.40))
         self.GD = self.D + 2 * self.M
-        gmask = Image.new("L", (self.GD, self.GD), 0)
-        gr = self.D / 2 + self.M * 0.32
         gc = self.GD / 2
+        gmask = Image.new("L", (self.GD, self.GD), 0)
+        gr = self.D / 2 + self.M * 0.20
         ImageDraw.Draw(gmask).ellipse((gc - gr, gc - gr, gc + gr, gc + gr), fill=255)
-        self.glow_mask = gmask.filter(ImageFilter.GaussianBlur(self.M * 0.80))
+        gmask = gmask.filter(ImageFilter.GaussianBlur(self.M * 0.36))
+        # radial taper: force the glow to reach 0 well inside the image bounds so the
+        # image edge can never show as a faint square over bright backgrounds
+        taper = Image.new("L", (self.GD, self.GD), 0)
+        tr = gc - 2
+        ImageDraw.Draw(taper).ellipse((gc - tr * 0.93, gc - tr * 0.93, gc + tr * 0.93, gc + tr * 0.93), fill=255)
+        taper = taper.filter(ImageFilter.GaussianBlur(self.M * 0.18))
+        self.glow_mask = ImageChops.multiply(gmask, taper)
 
         c = S / 2
         R = S * 0.47

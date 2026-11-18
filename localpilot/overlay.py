@@ -81,7 +81,7 @@ def _lerp_color(c1, c2, t):
     return "#%02x%02x%02x" % r
 
 
-class Overlay:
+class TkOverlay:
     def __init__(self):
         self._q: "queue.Queue[tuple]" = queue.Queue()
         self._ready = threading.Event()
@@ -422,6 +422,24 @@ class Overlay:
         c.create_polygon(pts, fill="white", outline=accent, width=2)
         # small accent dot at the tip
         c.create_oval(x - 3, y - 3, x + 3, y + 3, fill=accent, outline="white")
+
+
+def Overlay():
+    """Create the best available overlay.
+
+    Prefers the per-pixel-alpha HUD (truly transparent, no black halo / box over any
+    background). Falls back to the tkinter color-key overlay if the layered-window HUD
+    can't start. Both share the same API and are click-through + non-activating.
+    """
+    try:
+        from .hud import HudOverlay
+        h = HudOverlay()
+        if h.ok:
+            return h
+        h.close()
+    except Exception:
+        pass
+    return TkOverlay()
 
 
 class NullOverlay:

@@ -187,8 +187,17 @@ palette and motion speed:
 - **Done**: green. **Stopped** (F12): grey.
 - Plus a **status banner** (`step 3/40 | Notepad  (F12 to stop)`).
 
-The orb renders at ~7 ms/frame and falls back to a lightweight vector face if Pillow's Tk bridge
-is unavailable. Face states and palettes live in `localpilot/orb.py`.
+**True transparency.** The overlay (`localpilot/hud.py`) is a Win32 *layered window with per-pixel
+alpha* (`UpdateLayeredWindow`, premultiplied BGRA). Every frame is rendered with PIL as RGBA, so the
+background is genuinely transparent -- no black backdrop, no square box, no halo -- and the orb's soft
+glow blends cleanly over *any* content (verified pixel-exact on white, red, grey and near-black).
+Text is drawn outlined rather than in a panel, so nothing sits behind it. The window is click-through
+(`WS_EX_TRANSPARENT`), never takes focus (`WS_EX_NOACTIVATE`), and is titled with a sentinel so
+perception skips it. If the layered window can't start, it falls back to the older tkinter
+colour-key overlay automatically.
+
+The orb renders in ~8 ms (a full HUD frame is ~30 ms, ~20 fps). Face states and palettes live in
+`localpilot/orb.py`.
 
 It is engineered to **never steal focus** (so it can't break perception): created hidden, flagged
 `WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`, shown with `SW_SHOWNOACTIVATE`, tagged with a sentinel
