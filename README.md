@@ -121,7 +121,14 @@ python -m PyInstaller --onefile --noconsole --name LocalPilot --icon localpilot.
   --hidden-import PIL._tkinter_finder --hidden-import pystray._win32 localpilot_app.py
 ```
 The result is **`dist/LocalPilot.exe`** -- double-click to open the control panel; no Python
-install required on the target machine. **Ollama is still required separately** (it's the model
+install required on the target machine.
+
+> **Windows Smart App Control / App Control policies may block it.** The exe is *unsigned*, and
+> with Smart App Control in *Enforce* mode Windows refuses to run unsigned executables
+> ("An Application Control policy has blocked this file"). Options: sign the exe with a trusted
+> code-signing certificate, or just use the Python launcher, which is unaffected because
+> `python.exe` is signed -- double-click **`start_app.bat`** (control panel) or
+> **`start_tray.bat`** (tray). Don't disable Smart App Control just for this. **Ollama is still required separately** (it's the model
 server, multi-GB; the exe bundles only the agent client). Start Ollama and pull a model first.
 
 ## Desktop control panel
