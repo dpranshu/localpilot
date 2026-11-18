@@ -176,7 +176,7 @@ class Overlay:
             self.ax = self.sw - 120
             self.ay = self.sh - 150
             # premium orb face (PIL-rendered)
-            self.orb = Orb(diameter=112, key=(1, 1, 1)) if _HAS_ORB else None
+            self.orb = Orb(diameter=126, key=(1, 1, 1)) if _HAS_ORB else None
             self._photo = None
             self._phase = 0.0
             self._ok = True
@@ -374,19 +374,13 @@ class Overlay:
         # gentle float bob
         lift = int(-4 * (0.5 + 0.5 * math.sin(f * 0.07)))
         D = self.orb.D
-        pulse = (math.sin(f * 0.16) + 1) / 2
-        # soft ambient glow behind the orb
-        for i in range(4, 0, -1):
-            rr = D / 2 + i * 5 + pulse * 5
-            col = _lerp_color(accent, TRANSPARENT_KEY, 0.62 + i * 0.08)
-            c.create_oval(x - rr, y + lift - rr, x + rr, y + lift + rr, outline=col, width=2)
         # soft drop shadow ellipse under it
-        c.create_oval(x - D * 0.34, y + D * 0.5, x + D * 0.34, y + D * 0.58,
+        c.create_oval(x - D * 0.34, y + D * 0.52, x + D * 0.34, y + D * 0.60,
                       fill="#060608", outline="")
-        # the rendered orb
+        # the rendered orb (glow halo is baked into the image)
         img = self.orb.render(mode, self._phase)
         self._photo = ImageTk.PhotoImage(img)      # keep a ref (else GC'd)
-        c.create_image(x, y + lift, image=self._photo)
+        c.create_image(x, y + lift, image=self._photo)   # centered at (x, y)
 
     def _cursor_draw(self, accent, f):
         if self._cur_pos is None or self._cur_target is None:

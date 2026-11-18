@@ -12,7 +12,7 @@ Rendered to an image and shown on the click-through overlay.
 from __future__ import annotations
 
 import math
-from PIL import Image, ImageDraw, ImageFilter, ImageChops
+from PIL import Image, ImageDraw, ImageFilter, ImageChops, ImageEnhance
 
 PALETTES = [
     ["#092350", "#3765dc", "#24daca", "#efbafa"],   # 0 Thinking
@@ -47,24 +47,33 @@ class Orb:
         ImageDraw.Draw(self.cmask_ss).ellipse((2, 2, S - 3, S - 3), fill=255)
         self.cmask = self.cmask_ss.resize((self.D, self.D), Image.LANCZOS)
 
+        # glow canvas: sphere + a soft halo margin
+        self.M = max(12, int(self.D * 0.30))
+        self.GD = self.D + 2 * self.M
+        gmask = Image.new("L", (self.GD, self.GD), 0)
+        gr = self.D / 2 + self.M * 0.32
+        gc = self.GD / 2
+        ImageDraw.Draw(gmask).ellipse((gc - gr, gc - gr, gc + gr, gc + gr), fill=255)
+        self.glow_mask = gmask.filter(ImageFilter.GaussianBlur(self.M * 0.80))
+
         c = S / 2
         R = S * 0.47
-        # reflection highlight (top-left), soft
+        # reflection highlight (top-left), soft and bright
         refl = Image.new("L", (S, S), 0)
         rr = R * 0.95
         ox, oy = c - R * 0.34, c - R * 0.52
-        ImageDraw.Draw(refl).ellipse((ox - rr, oy - rr, ox + rr, oy + rr), fill=130)
+        ImageDraw.Draw(refl).ellipse((ox - rr, oy - rr, ox + rr, oy + rr), fill=150)
         self.refl = refl.filter(ImageFilter.GaussianBlur(S * 0.07))
-        # bottom shade (sphere body)
+        # bottom shade (sphere body) -- lighter so colors stay vivid
         shade = Image.new("L", (S, S), 0)
         sr = R * 1.05
         sx, sy = c, c + R * 0.42
-        ImageDraw.Draw(shade).ellipse((sx - sr, sy - sr * 0.8, sx + sr, sy + sr * 1.2), fill=135)
+        ImageDraw.Draw(shade).ellipse((sx - sr, sy - sr * 0.8, sx + sr, sy + sr * 1.2), fill=98)
         self.shade = shade.filter(ImageFilter.GaussianBlur(S * 0.09))
-        # rim (dark ring near the edge -> spherical edge)
+        # rim (soft dark ring near the edge -> spherical edge), lighter
         rim = Image.new("L", (S, S), 0)
         dr = ImageDraw.Draw(rim)
-        dr.ellipse((3, 3, S - 4, S - 4), outline=255, width=int(S * 0.05))
+        dr.ellipse((3, 3, S - 4, S - 4), outline=150, width=int(S * 0.045))
         self.rim = rim.filter(ImageFilter.GaussianBlur(S * 0.03))
         # gloss specular dot
         self.spec_xy = (int(c - R * 0.33), int(c - R * 0.40))
@@ -81,11 +90,11 @@ class Orb:
         d = ImageDraw.Draw(layer)
         for i in range(3):
             ang = t * (0.66 + i * 0.12) + i * 2.1
-            px = c + S * 0.33 * math.cos(ang)
-            py = c + S * 0.31 * math.sin(ang * 1.13)
-            pr = R * (1.30 - i * 0.12)
+            px = c + S * 0.34 * math.cos(ang)
+            py = c + S * 0.32 * math.sin(ang * 1.13)
+            pr = R * (1.38 - i * 0.11)        # larger pools -> more color
             d.ellipse((px - pr, py - pr, px + pr, py + pr), fill=pal[i + 1])
-        layer = layer.filter(ImageFilter.GaussianBlur(S * 0.085))   # liquid blend
+        layer = layer.filter(ImageFilter.GaussianBlur(S * 0.07))    # liquid blend (less wash)
 
         # shade (darken bottom for sphere volume)
         layer.paste((9, 10, 22), (0, 0), self.shade)
@@ -100,8 +109,19 @@ class Orb:
                    fill=(255, 255, 255))
         layer = layer.filter(ImageFilter.GaussianBlur(S * 0.006))
 
-        img = layer.resize((self.D, self.D), Image.LANCZOS)
-        # clean silhouette: outside circle = key
-        out = Image.new("RGB", (self.D, self.D), self.key)
-        out.paste(img, (0, 0), self.cmask)
+        # make it pop: saturation + a touch of contrast/brightness
+        layer = ImageEnhance.Color(layer).enhance(1.34)
+        layer = ImageEnhance.Contrast(layer).enhance(1.07)
+        layer = ImageEnhance.Brightness(layer).enhance(1.05)
+
+        sphere = layer.resize((self.D, self.D), Image.LANCZOS).convert("RGBA")
+        sphere.putalpha(self.cmask)   # true transparent, anti-aliased edge
+
+        # baked soft glow halo (smooth, composites cleanly over anything)
+        out = Image.new("RGBA", (self.GD, self.GD), (0, 0, 0, 0))
+        glow_alpha = int(80 + 30 * (0.5 + 0.5 * math.sin(t * 0.5)))   # gentle pulse
+        glow = Image.new("RGBA", (self.GD, self.GD), pal[2] + (0,))
+        glow.putalpha(self.glow_mask.point(lambda v: v * glow_alpha // 255))
+        out = Image.alpha_composite(out, glow)
+        out.alpha_composite(sphere, (self.M, self.M))
         return out
