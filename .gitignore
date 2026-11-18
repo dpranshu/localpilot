@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Runtime output
+logs/
+
+# Generated / local
+*.lnk
+OllamaSetup.exe
+
+# Stray / unrelated
+@AutomationLog.txt
+AutomationLog.txt
+motion-preview.html
