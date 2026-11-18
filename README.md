@@ -171,17 +171,21 @@ Creates `LocalPilot.lnk` in your per-user Startup folder
 Per-user only -- no admin needed, and it touches only that one shortcut. Remove it with
 `--uninstall` (or just delete the `.lnk`).
 
-## Live viewer -- the animated AI character
+## Live viewer -- the AI orb
 
-By default a **transparent, click-through overlay** puts a little **cartoon AI character** on your
-screen that reacts in real time as the agent works:
+By default a **transparent, click-through overlay** puts a premium **liquid-orb AI face** on your
+screen (PIL-rendered: a glossy sphere with moving color pools, a reflection highlight, spherical
+shading and a gloss dot) that reacts in real time as the agent works. Each state has its own
+palette and motion speed:
 
-- **Thinking** (while the model computes): blue glowing ring, bouncing `...`, blinking eyes.
-- **Acting**: turns green, shows a **speech bubble** of what it's doing, and draws a **pointer line**
-  from the character to a **glowing box** around the exact control it's about to touch; its eyes
-  glance toward the target.
-- **Done**: green, smiling. **Stopped** (F12): red, flat.
+- **Thinking** (while the model computes): cool blue/teal, slow swirl, soft pulsing glow.
+- **Acting**: energetic cyan, shows a **speech bubble** of what it's doing, draws a **pointer line**
+  to a **glowing box** around the exact control, and its own cursor glides to the target.
+- **Done**: green. **Stopped** (F12): grey.
 - Plus a **status banner** (`step 3/40 | Notepad  (F12 to stop)`).
+
+The orb renders at ~7 ms/frame and falls back to a lightweight vector face if Pillow's Tk bridge
+is unavailable. Face states and palettes live in `localpilot/orb.py`.
 
 It is engineered to **never steal focus** (so it can't break perception): created hidden, flagged
 `WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`, shown with `SW_SHOWNOACTIVATE`, tagged with a sentinel

@@ -38,6 +38,14 @@ SENTINEL = "LocalPilotOverlay"
 TRANSPARENT_KEY = "#010101"
 BANNER_BG = "#101014"
 
+# Premium liquid-orb face (PIL-rendered). Falls back to the vector avatar if unavailable.
+try:
+    from PIL import ImageTk
+    from .orb import Orb, STATE_MODE, PALETTES, SPEED
+    _HAS_ORB = True
+except Exception:
+    _HAS_ORB = False
+
 # State colors
 C_THINK = "#3b9bff"
 C_ACT = "#35d07f"
@@ -167,6 +175,10 @@ class Overlay:
             # avatar home position (bottom-right)
             self.ax = self.sw - 120
             self.ay = self.sh - 150
+            # premium orb face (PIL-rendered)
+            self.orb = Orb(diameter=112, key=(1, 1, 1)) if _HAS_ORB else None
+            self._photo = None
+            self._phase = 0.0
             self._ok = True
         except Exception:
             self._ready.set(); return
@@ -242,8 +254,13 @@ class Overlay:
         c.delete("all")
         f = self._frame
         state = self._state
-        accent = {"thinking": C_THINK, "acting": C_ACT, "done": C_DONE,
-                  "stopped": C_STOP, "idle": C_IDLE}.get(state, C_IDLE)
+        if _HAS_ORB and self.orb is not None:
+            mode = STATE_MODE.get(state, 5)
+            accent = PALETTES[mode][2]            # bright accent from the orb's palette
+        else:
+            mode = 5
+            accent = {"thinking": C_THINK, "acting": C_ACT, "done": C_DONE,
+                      "stopped": C_STOP, "idle": C_IDLE}.get(state, C_IDLE)
 
         # --- target highlight + pointer (acting) ---
         if state == "acting" and self._rect:
@@ -276,8 +293,11 @@ class Overlay:
         if say and state in ("thinking", "acting", "done", "stopped"):
             self._bubble(self.ax, self.ay - 62, say, accent)
 
-        # --- the cartoon AI character ---
-        self._avatar(self.ax, self.ay, accent, state, f)
+        # --- the AI face: premium orb (or vector fallback) ---
+        if _HAS_ORB and self.orb is not None:
+            self._orb_draw(self.ax, self.ay, mode, accent, f)
+        else:
+            self._avatar(self.ax, self.ay, accent, state, f)
 
         # --- the agent's own cursor ---
         self._cursor_draw(accent, f)
@@ -346,6 +366,27 @@ class Overlay:
                               x - 10 + i * 16, y - R - 28 + dy,
                               fill=accent if on else C_IDLE, outline="")
 
+
+    def _orb_draw(self, x, y, mode, accent, f):
+        c = self.canvas
+        # advance the liquid motion at this state's speed
+        self._phase += max(0.02, SPEED[mode % len(SPEED)] * 0.11)
+        # gentle float bob
+        lift = int(-4 * (0.5 + 0.5 * math.sin(f * 0.07)))
+        D = self.orb.D
+        pulse = (math.sin(f * 0.16) + 1) / 2
+        # soft ambient glow behind the orb
+        for i in range(4, 0, -1):
+            rr = D / 2 + i * 5 + pulse * 5
+            col = _lerp_color(accent, TRANSPARENT_KEY, 0.62 + i * 0.08)
+            c.create_oval(x - rr, y + lift - rr, x + rr, y + lift + rr, outline=col, width=2)
+        # soft drop shadow ellipse under it
+        c.create_oval(x - D * 0.34, y + D * 0.5, x + D * 0.34, y + D * 0.58,
+                      fill="#060608", outline="")
+        # the rendered orb
+        img = self.orb.render(mode, self._phase)
+        self._photo = ImageTk.PhotoImage(img)      # keep a ref (else GC'd)
+        c.create_image(x, y + lift, image=self._photo)
 
     def _cursor_draw(self, accent, f):
         if self._cur_pos is None or self._cur_target is None:
