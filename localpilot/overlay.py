@@ -424,16 +424,17 @@ class TkOverlay:
         c.create_oval(x - 3, y - 3, x + 3, y + 3, fill=accent, outline="white")
 
 
-def Overlay():
+def Overlay(cfg=None):
     """Create the best available overlay.
 
     Prefers the per-pixel-alpha HUD (truly transparent, no black halo / box over any
-    background). Falls back to the tkinter color-key overlay if the layered-window HUD
-    can't start. Both share the same API and are click-through + non-activating.
+    background; draggable dot-sphere face with a right-click menu). Falls back to the
+    tkinter color-key overlay if the layered-window HUD can't start. Both share the same
+    API and never take focus. `cfg` supplies stop_event / open_app_callback / orb_size.
     """
     try:
         from .hud import HudOverlay
-        h = HudOverlay()
+        h = HudOverlay(cfg)
         if h.ok:
             return h
         h.close()

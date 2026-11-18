@@ -299,7 +299,12 @@ def run_vision(goal: str, cfg) -> str:
     print("Hold F12 to stop. Starting in 3s -- switch to your target window...")
     time.sleep(3)
 
-    overlay = Overlay() if cfg.show_overlay else NullOverlay()
+    if getattr(cfg, "stop_event", None) is None:
+        import threading
+        cfg.stop_event = threading.Event()
+    cfg.stop_event.clear()
+
+    overlay = Overlay(cfg) if cfg.show_overlay else NullOverlay()
     if cfg.show_overlay and not overlay.ok:
         overlay = NullOverlay()
 

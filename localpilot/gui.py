@@ -23,7 +23,7 @@ from . import llm
 
 try:
     from PIL import ImageTk
-    from .orb import Orb, STATE_MODE, SPEED
+    from .dotsphere import DotSphere
     _HAS_ORB = True
 except Exception:
     _HAS_ORB = False
@@ -66,9 +66,9 @@ class App:
         self.cfg.log_callback = self.logq.put
         self.running = False
         self._orb_state = "idle"
-        self._phase = 0.0
-        self.orb = Orb(diameter=66) if _HAS_ORB else None
+        self.orb = DotSphere(diameter=72, margin=6) if _HAS_ORB else None
         self._orb_photo = None
+        self.cfg.open_app_callback = lambda: self.logq.put({"event": "_show"})
         self._build()
 
     # ---------- UI ----------
@@ -278,7 +278,14 @@ class App:
             while True:
                 rec = self.logq.get_nowait()
                 e = rec.get("event")
-                if e == "step":
+                if e == "_show":                           # orb menu: "Open LocalPilot app"
+                    try:
+                        self.root.deiconify()
+                        self.root.lift()
+                        self.root.focus_force()
+                    except Exception:
+                        pass
+                elif e == "step":
                     self._orb_state = "thinking"
                 elif e in ("action", "decide"):
                     self._orb_state = "acting"
@@ -302,7 +309,7 @@ class App:
             pass
         self._animate_orb()
         try:
-            self.root.after(90, self._drain)
+            self.root.after(60, self._drain)
         except Exception:
             pass
 
@@ -313,11 +320,8 @@ class App:
     def _animate_orb(self):
         if not self.orb:
             return
-        from .orb import STATE_MODE, SPEED
-        mode = STATE_MODE.get(self._orb_state, 5)
-        self._phase += max(0.02, SPEED[mode % len(SPEED)] * 0.11)
         try:
-            img = self.orb.render(mode, self._phase)
+            img = self.orb.render(self._orb_state)         # white-dot sphere, transparent bg
             self._orb_photo = ImageTk.PhotoImage(img)
             self.orb_label.config(image=self._orb_photo)
         except Exception:

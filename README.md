@@ -181,35 +181,57 @@ Creates `LocalPilot.lnk` in your per-user Startup folder
 Per-user only -- no admin needed, and it touches only that one shortcut. Remove it with
 `--uninstall` (or just delete the `.lnk`).
 
-## Live viewer -- the AI orb
+## Live viewer -- the dot-sphere face
 
-By default a **transparent, click-through overlay** puts a premium **liquid-orb AI face** on your
-screen (PIL-rendered: a glossy sphere with moving color pools, a reflection highlight, spherical
-shading and a gloss dot) that reacts in real time as the agent works. Each state has its own
-palette and motion speed:
+While a task runs, the agent's face is a **halftone sphere of white dots on a fully transparent
+background** (`localpilot/dotsphere.py`). Dots sit on latitude rows that follow the curvature of the
+ball, and each dot's size comes from the lighting -- big, almost-merged dots toward the upper right,
+shrinking to nothing toward the lower left and the rim -- which is what gives it the printed-halftone
+look. It **spins continuously while the agent works**, and the state changes the motion:
 
-- **Thinking** (while the model computes): cool blue/teal, slow swirl, soft pulsing glow.
-- **Acting**: energetic cyan, shows a **speech bubble** of what it's doing, draws a **pointer line**
-  to a **glowing box** around the exact control, and its own cursor glides to the target.
-- **Done**: green. **Stopped** (F12): grey.
-- Plus a **status banner** (`step 3/40 | Notepad  (F12 to stop)`).
+| State | Motion |
+|---|---|
+| idle | slow spin |
+| thinking | faster spin + a gentle breathing ripple through the dots |
+| acting | fast spin + a strong ripple |
+| done | calm |
+| stopped | frozen and dimmed |
 
-**True transparency.** The overlay (`localpilot/hud.py`) is a Win32 *layered window with per-pixel
-alpha* (`UpdateLayeredWindow`, premultiplied BGRA). Every frame is rendered with PIL as RGBA, so the
-background is genuinely transparent -- no black backdrop, no square box, no halo -- and the orb's soft
-glow blends cleanly over *any* content (verified pixel-exact on white, red, grey and near-black).
-Text is drawn outlined rather than in a panel, so nothing sits behind it. The window is click-through
-(`WS_EX_TRANSPARENT`), never takes focus (`WS_EX_NOACTIVATE`), and is titled with a sentinel so
-perception skips it. If the layered window can't start, it falls back to the older tkinter
-colour-key overlay automatically.
+Because white dots would vanish on a white page, each dot gets a faint soft shadow behind it.
+Around the face the HUD also draws a **status line**, **outlined speech text** (no box behind it), a
+**glowing box** around the control it is about to touch, a dashed **pointer line**, and the agent's own
+**cursor** (see below).
 
-The orb renders in ~8 ms (a full HUD frame is ~30 ms, ~20 fps). Face states and palettes live in
-`localpilot/orb.py`.
+### Drag it, right-click it
 
-It is engineered to **never steal focus** (so it can't break perception): created hidden, flagged
-`WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`, shown with `SW_SHOWNOACTIVATE`, tagged with a sentinel
-title, and perception is hardened to skip the overlay even if it lands in front. The character
-animates on its own thread at ~20 fps. Disable with `--no-overlay`.
+- **Drag** the ball anywhere; its position is remembered between runs.
+- **Right-click** it for a menu:
+  - **Stop task** -- stops the running task after the current step (greyed out when idle)
+  - **Open LocalPilot app** -- brings the control panel to the front (launches it if it isn't running)
+  - **Reset position**
+
+Interacting with it **never steals focus**, so the window the agent is working in stays active.
+`F12` still emergency-stops.
+
+### How the transparency and mouse handling work
+
+`localpilot/hud.py` uses two Win32 *layered windows with per-pixel alpha* (`UpdateLayeredWindow`,
+premultiplied BGRA), rendered every frame with PIL as RGBA -- so there is no black backdrop, no box
+and no halo over any content:
+
+1. **Main HUD** (full-screen) is **click-through** (`WS_EX_TRANSPARENT`): all clicks -- including the
+   agent's own -- pass straight through the status text, highlight box and cursor.
+2. **Orb window** (small) is *not* click-through, but layered windows are hit-tested by alpha, so only
+   the ball itself (which carries an invisible alpha=1 disc, so the gaps between dots count) receives
+   the mouse; its transparent corners pass clicks through. It is `WS_EX_NOACTIVATE` and answers
+   `WM_MOUSEACTIVATE` with `MA_NOACTIVATE`.
+
+Both windows carry a sentinel title so perception ignores them. If the layered windows can't start, it
+falls back to the older tkinter colour-key overlay automatically. Size: `orb_size` in `config.py`
+(default 150 px). Disable the whole overlay with `--no-overlay`.
+
+> Tip: if the agent needs to click something directly *under* the ball, drag the ball away first --
+> the ball catches clicks that land on it.
 
 ### The agent's own cursor
 

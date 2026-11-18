@@ -63,6 +63,8 @@ class Config:
     verbose: bool = True
 
     # --- Runtime hooks (set by the GUI; not CLI flags) ---
+    orb_size: int = 150                # diameter (px) of the agent's dot-sphere face
+    open_app_callback: object = None   # callable() -> bring the app/control panel to the front
     stop_event: object = None          # threading.Event -> abort between steps
     log_callback: object = None        # callable(record: dict) -> stream events to a UI
 

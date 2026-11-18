@@ -124,7 +124,13 @@ def run(goal: str, cfg: Config | None = None) -> str:
         return f"Aborted: {msg}"
 
     # Live viewer
-    overlay = Overlay() if cfg.show_overlay else NullOverlay()
+    # one stop event per run (so the orb's right-click "Stop task" works from the CLI too)
+    if getattr(cfg, "stop_event", None) is None:
+        import threading
+        cfg.stop_event = threading.Event()
+    cfg.stop_event.clear()
+
+    overlay = Overlay(cfg) if cfg.show_overlay else NullOverlay()
     if cfg.show_overlay and not overlay.ok:
         print("(overlay unavailable; continuing without it)")
         overlay = NullOverlay()
