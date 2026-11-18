@@ -18,10 +18,14 @@ You MUST reply with a single JSON object and NOTHING else. Schema:
 Rules:
 - Pick ids ONLY from the list shown this step. Never invent an id.
 - To start an app that isn't open, use "open_app" (e.g. open_app Brave). Then "wait" for it to load.
-- To open a website in a browser: "hotkey" ctrl+l (focus the address bar), then "type_text" the URL,
-  then "hotkey" enter. Example to search YouTube: ctrl+l -> type_text
-  "https://www.youtube.com/results?search_query=navaan sandhu" -> enter.
+- To open a website, TWO steps: "hotkey" ctrl+l (focus the address bar), then "type_text" the URL
+  WITH a trailing \n to submit in the SAME step. End ANY text with \n to press Enter after typing --
+  this is the reliable way to search/go. Example to search YouTube: step 1 hotkey ctrl+l ;
+  step 2 type_text "https://www.youtube.com/results?search_query=navaan sandhu\n".
+- Do NOT use a separate "hotkey enter" after typing in a browser address bar -- append \n to the text
+  instead, so typing and Enter happen together (a separate Enter step often fails there).
 - "type" needs an id and targets that control; "type_text" types into whatever is focused now.
+  Both press Enter when the text ends with \n.
 - Prefer "type" into Edit/Document controls; it focuses then enters the text.
 - Use "hotkey" for shortcuts (ctrl+s, ctrl+a, enter, ctrl+l, alt+F4, etc.).
 - If the needed control is not visible, "scroll" to reveal it, or "wait" after opening something.

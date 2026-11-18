@@ -191,8 +191,9 @@ def execute(cfg, action: dict, elements) -> ActionResult:
         submit = text.endswith("\n")
         pyautogui.write(text.rstrip("\n"), interval=0.02)
         if submit:
+            time.sleep(0.2)
             pyautogui.press("enter")
-        return ActionResult(True, f"type_text {text[:40]!r}{' + enter' if submit else ''}")
+        return ActionResult(True, f"type_text {text[:40]!r}{' + Enter' if submit else ''}")
 
     if kind == "hotkey":
         keys = str(action.get("keys", "")).strip()
@@ -241,7 +242,22 @@ def execute(cfg, action: dict, elements) -> ActionResult:
             return ActionResult(True, f"click [{eid}] {el.role} '{el.name[:40]}' -> {how}")
         else:
             text = str(action.get("text", ""))
-            how = _type_control(el.control, text)
+            submit = text.endswith("\n")
+            body = text.rstrip("\n")
+            if submit and _HAS_PYAUTOGUI:
+                # Submitting (e.g. a URL/search): use REAL keystrokes so Chromium's
+                # omnibox registers typed text, then Enter in the same step.
+                try:
+                    el.control.SetFocus()
+                except Exception:
+                    pass
+                time.sleep(0.15)
+                pyautogui.typewrite(body, interval=0.02)
+                time.sleep(0.2)
+                pyautogui.press("enter")
+                how = "typed (keys) + Enter"
+            else:
+                how = _type_control(el.control, body)
             return ActionResult(True, f"type [{eid}] <- {text[:40]!r} -> {how}")
 
     return ActionResult(False, f"unknown action: {action}")

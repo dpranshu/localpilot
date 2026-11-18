@@ -148,6 +148,9 @@ def run(goal: str, cfg: Config | None = None) -> str:
         from . import vision as vision_mod  # noqa
     text_stall = 0
     vision_sticky = 0
+    addr_armed = False          # True right after ctrl+l -> auto-Enter on next type
+    last_sig = None
+    repeat = 0
 
     try:
         for step in range(1, cfg.max_steps + 1):
@@ -218,6 +221,32 @@ def run(goal: str, cfg: Config | None = None) -> str:
                     text_stall += 1
                     time.sleep(cfg.settle_seconds)
                     continue
+                akind = action.get("action")
+                # Auto-submit: typing right after ctrl+l (address bar) -> append Enter,
+                # so navigation works even if the model forgets the trailing newline.
+                if addr_armed and akind in ("type", "type_text"):
+                    t = str(action.get("text", ""))
+                    if not t.endswith("\n"):
+                        action["text"] = t + "\n"
+                addr_armed = (akind == "hotkey"
+                              and "ctrl" in str(action.get("keys", "")).lower()
+                              and str(action.get("keys", "")).lower().replace(" ", "").endswith("+l"))
+
+                # Repeat / no-progress detection (stop a stuck loop; escalate in hybrid)
+                sig = (akind, str(action.get("keys", "")), action.get("id"),
+                       str(action.get("text", ""))[:20], action.get("name"))
+                repeat = repeat + 1 if sig == last_sig else 0
+                last_sig = sig
+                if repeat >= 2:
+                    if cfg.backend == "hybrid":
+                        logger.log({"event": "escalate", "step": step, "reason": "text repeat"})
+                        vision_sticky = cfg.hybrid_vision_sticky
+                        text_stall = 0; repeat = 0
+                        time.sleep(cfg.settle_seconds); continue
+                    final = "stopped: repeated the same action with no progress"
+                    logger.log({"event": "stop", "step": step, "reason": "repeat"})
+                    overlay.done("no further progress"); time.sleep(1.0); break
+
                 label = _action_label(action)
                 say = str(action.get("say", "")) or label
                 rect = _rect_for_action(action, elements)
