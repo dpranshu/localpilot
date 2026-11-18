@@ -132,10 +132,13 @@ A window to run and control everything -- no terminal:
 python localpilot_app.py          # or: python -m localpilot.gui
 ```
 
-- **Task** field + **Run** / **Stop** (Stop aborts the running task after the current step).
+- A **live orb** in the header that animates with the agent's state (idle / thinking / acting / done).
+- **Task** field (with a placeholder example) + **Run** / **Stop** (Stop aborts after the current
+  step; **Esc** also stops).
 - **Backend** (uia/vision/hybrid), **Model**, **Max steps**.
 - Toggles: **Confirm each step · Agent cursor · Overlay · Dry run · Real cursor**.
-- A **live log** streams every step/action as it happens; **Check Ollama** / **Clear log** / **Quit**.
+- A **live log** streams every step/action; a **color-coded status** line (green done / red error);
+  **Check Ollama** / **Clear log** / **Quit**.
 
 When you hit Run, the panel **minimizes itself** so it isn't the window the agent acts on --
 focus your target during the 3s countdown. (The tray's "Open control panel" opens this too.)

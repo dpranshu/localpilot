@@ -21,10 +21,19 @@ from .config import Config
 from .agent import run as run_agent
 from . import llm
 
+try:
+    from PIL import ImageTk
+    from .orb import Orb, STATE_MODE, SPEED
+    _HAS_ORB = True
+except Exception:
+    _HAS_ORB = False
+
 BG = "#15151c"
 FG = "#e8e8ef"
 ACCENT = "#35d07f"
 SUBTLE = "#9a9aa8"
+OK_COL = "#35d07f"
+ERR_COL = "#ff5a52"
 
 
 def _fmt(rec: dict) -> str | None:
@@ -56,6 +65,10 @@ class App:
         self.logq: "queue.Queue[dict]" = queue.Queue()
         self.cfg.log_callback = self.logq.put
         self.running = False
+        self._orb_state = "idle"
+        self._phase = 0.0
+        self.orb = Orb(diameter=66) if _HAS_ORB else None
+        self._orb_photo = None
         self._build()
 
     # ---------- UI ----------
@@ -78,10 +91,27 @@ class App:
         st.configure("Accent.TButton", foreground="#07110a")
         st.map("Accent.TButton", background=[("!disabled", ACCENT)])
 
+        try:
+            import os
+            ico = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "localpilot.ico")
+            if os.path.exists(ico):
+                self.root.iconbitmap(ico)
+        except Exception:
+            pass
+
         pad = {"padx": 10, "pady": 6}
-        head = ttk.Label(self.root, text="LocalPilot  — local AI desktop agent",
-                         font=("Segoe UI", 13, "bold"))
-        head.pack(anchor="w", **pad)
+        # header: live orb + title
+        hf = tk.Frame(self.root, bg=BG)
+        hf.pack(fill="x", padx=10, pady=(10, 2))
+        self.orb_label = tk.Label(hf, bg=BG, bd=0)
+        self.orb_label.pack(side="left", padx=(0, 10))
+        tcol = tk.Frame(hf, bg=BG)
+        tcol.pack(side="left", anchor="w")
+        tk.Label(tcol, text="LocalPilot", bg=BG, fg=FG,
+                 font=("Segoe UI", 15, "bold")).pack(anchor="w")
+        tk.Label(tcol, text="local AI desktop agent", bg=BG, fg=SUBTLE,
+                 font=("Segoe UI", 9)).pack(anchor="w")
 
         # task row
         tf = tk.Frame(self.root, bg=BG)
@@ -91,6 +121,11 @@ class App:
                              relief="flat", font=("Segoe UI", 11))
         self.task.pack(side="left", fill="x", expand=True, padx=8, ipady=5)
         self.task.bind("<Return>", lambda e: self.on_run())
+        self._ph = "e.g.  open Brave and play Navaan Sandhu on YouTube"
+        self._ph_on = False
+        self._show_ph()
+        self.task.bind("<FocusIn>", lambda e: self._clear_ph())
+        self.task.bind("<FocusOut>", lambda e: self._show_ph())
         self.run_btn = ttk.Button(tf, text="Run", style="Accent.TButton", command=self.on_run)
         self.run_btn.pack(side="left")
         self.stop_btn = ttk.Button(tf, text="Stop", command=self.on_stop, state="disabled")
@@ -126,9 +161,10 @@ class App:
                           ("Real cursor", self.v_real)]:
             ttk.Checkbutton(tg, text=text, variable=var).pack(side="left", padx=(0, 12))
 
-        # status
-        self.status = ttk.Label(self.root, text="Ready.", style="Sub.TLabel")
-        self.status.pack(anchor="w", padx=10, pady=(4, 0))
+        # status (tk.Label so we can color it)
+        self.status = tk.Label(self.root, text="Ready.", bg=BG, fg=SUBTLE,
+                               font=("Segoe UI", 10), anchor="w")
+        self.status.pack(fill="x", padx=10, pady=(4, 0))
 
         # log
         lf = tk.Frame(self.root, bg=BG)
@@ -148,9 +184,29 @@ class App:
         ttk.Button(bf, text="Quit", command=self.on_quit).pack(side="right")
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_quit)
+        self.root.bind("<Escape>", lambda e: self.on_stop())
         self.root.after(120, self._drain)
 
     # ---------- helpers ----------
+    def _show_ph(self):
+        if not self.task.get():
+            self._ph_on = True
+            self.task.insert(0, self._ph)
+            self.task.config(fg=SUBTLE)
+
+    def _clear_ph(self):
+        if self._ph_on:
+            self._ph_on = False
+            self.task.delete(0, "end")
+            self.task.config(fg=FG)
+
+    def task_text(self):
+        return "" if self._ph_on else self.task.get().strip()
+
+    def set_status(self, text, kind="info"):
+        col = {"ok": OK_COL, "err": ERR_COL, "run": FG, "info": SUBTLE}.get(kind, SUBTLE)
+        self.status.config(text=text[:120], fg=col)
+
     def append(self, text):
         self.log.config(state="normal")
         self.log.insert("end", text + "\n")
@@ -177,16 +233,17 @@ class App:
     def on_run(self):
         if self.running:
             return
-        goal = self.task.get().strip()
+        goal = self.task_text()
         if not goal:
-            self.status.config(text="Type a task first.")
+            self.set_status("Type a task first.", "err")
             return
         self._apply()
         self.stop_event.clear()
         self.running = True
+        self._orb_state = "thinking"
         self.run_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
-        self.status.config(text="Running… focus your target window during the 3s countdown.")
+        self.set_status("Running… focus your target window during the 3s countdown.", "run")
         self.append(f"\n=== RUN ({self.cfg.backend}): {goal} ===")
         self.root.iconify()   # get the panel out of the way so it isn't acted on
 
@@ -199,12 +256,14 @@ class App:
         threading.Thread(target=worker, daemon=True).start()
 
     def on_stop(self):
+        if not self.running:
+            return
         self.stop_event.set()
-        self.status.config(text="Stopping after this step…")
+        self.set_status("Stopping after this step…", "info")
 
     def on_check(self):
         ok, msg = llm.ping(self.cfg)
-        self.status.config(text=msg)
+        self.set_status(msg, "ok" if ok else "err")
         self.append(msg)
 
     def on_quit(self):
@@ -218,11 +277,20 @@ class App:
         try:
             while True:
                 rec = self.logq.get_nowait()
-                if rec.get("event") == "_final":
+                e = rec.get("event")
+                if e == "step":
+                    self._orb_state = "thinking"
+                elif e in ("action", "decide"):
+                    self._orb_state = "acting"
+                elif e == "_final":
                     self.running = False
                     self.run_btn.config(state="normal")
                     self.stop_btn.config(state="disabled")
-                    self.status.config(text=rec.get("final", "done")[:90])
+                    final = rec.get("final", "done")
+                    bad = final.startswith(("stopped", "aborted", "error", "Aborted"))
+                    self._orb_state = "stopped" if bad else "done"
+                    self.set_status(final, "err" if bad else "ok")
+                    self.root.after(2600, self._idle_orb)
                     try:
                         self.root.deiconify()
                     except Exception:
@@ -232,8 +300,26 @@ class App:
                     self.append(line)
         except queue.Empty:
             pass
+        self._animate_orb()
         try:
-            self.root.after(120, self._drain)
+            self.root.after(90, self._drain)
+        except Exception:
+            pass
+
+    def _idle_orb(self):
+        if not self.running:
+            self._orb_state = "idle"
+
+    def _animate_orb(self):
+        if not self.orb:
+            return
+        from .orb import STATE_MODE, SPEED
+        mode = STATE_MODE.get(self._orb_state, 5)
+        self._phase += max(0.02, SPEED[mode % len(SPEED)] * 0.11)
+        try:
+            img = self.orb.render(mode, self._phase)
+            self._orb_photo = ImageTk.PhotoImage(img)
+            self.orb_label.config(image=self._orb_photo)
         except Exception:
             pass
 
