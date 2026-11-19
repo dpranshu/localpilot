@@ -5,13 +5,14 @@ no gradients/alpha): a dark base, 3 slowly-rotating color "pools" blurred into a
 liquid, a top-left reflection highlight, spherical shade + rim, and a gloss dot.
 Rendered to an image and shown on the click-through overlay.
 
-9 states, each with its own 4-color palette and motion speed (from the design):
+10 states, each with its own 4-color palette and motion speed:
   0 Thinking  1 Puzzle  2 Researching  3 Working  4 Verifying
-  5 Sleeping  6 Stopping 7 Stopped     8 Complete
+  5 Sleeping  6 Stopping 7 Stopped     8 Complete  9 Idle
 """
 from __future__ import annotations
 
 import math
+import time
 from PIL import Image, ImageDraw, ImageFilter, ImageChops, ImageEnhance
 
 PALETTES = [
@@ -24,11 +25,13 @@ PALETTES = [
     ["#41293d", "#aa6577", "#efa184", "#ffdad2"],   # 6 Stopping
     ["#25303e", "#536574", "#8297a3", "#b9c8cb"],   # 7 Stopped
     ["#103f42", "#208c89", "#76e2ae", "#e3ffe4"],   # 8 Complete
+    ["#182447", "#6661bf", "#83c9ee", "#e3d3ff"],   # 9 Idle
 ]
-SPEED = [.72, 1.1, .95, 1.45, .58, .38, .3, 0.0, .34]
+SPEED = [.72, 1.1, .95, 1.45, .58, .38, .3, 0.0, .34, .24]
 
 # agent state -> visual mode
-STATE_MODE = {"idle": 5, "thinking": 0, "acting": 3, "done": 8, "stopped": 7}
+STATE_MODE = {"idle": 9, "sleeping": 5, "thinking": 0, "acting": 3,
+              "done": 8, "stopped": 7}
 
 
 def _rgb(h):
@@ -37,7 +40,7 @@ def _rgb(h):
 
 
 class Orb:
-    def __init__(self, diameter=120, key=(1, 1, 1), ss=2):
+    def __init__(self, diameter=120, key=(1, 1, 1), ss=2, margin=None):
         self.D = int(diameter)
         self.S = int(diameter * ss)
         self.key = key
@@ -48,7 +51,7 @@ class Orb:
         self.cmask = self.cmask_ss.resize((self.D, self.D), Image.LANCZOS)
 
         # glow canvas: sphere + a soft halo margin
-        self.M = max(16, int(self.D * 0.40))
+        self.M = max(16, int(self.D * 0.40)) if margin is None else margin
         self.GD = self.D + 2 * self.M
         gc = self.GD / 2
         gmask = Image.new("L", (self.GD, self.GD), 0)
@@ -87,7 +90,7 @@ class Orb:
         self.spec_r = int(R * 0.13)
 
     def render(self, mode: int, t: float):
-        """Return an RGB image (size D) of the orb; outside the circle == key color."""
+        """Return the orb and its glow on a transparent RGBA image."""
         S = self.S
         pal = [_rgb(x) for x in PALETTES[mode % len(PALETTES)]]
         c = S / 2
@@ -132,3 +135,56 @@ class Orb:
         out = Image.alpha_composite(out, glow)
         out.alpha_composite(sphere, (self.M, self.M))
         return out
+
+
+def motion_enabled():
+    """Read the Windows animation preference, defaulting to motion elsewhere."""
+    import ctypes
+    enabled = ctypes.c_int(1)
+    try:
+        ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(enabled), 0)
+    except AttributeError:
+        pass
+    return bool(enabled.value)
+
+
+class AnimatedOrb:
+    """Render a gradient orb inside a fixed window while its center floats."""
+
+    def __init__(self, diameter, margin, animate=None):
+        self.orb = Orb(diameter, margin=margin)
+        self.size = self.orb.GD + 8
+        self.lift = 0
+        self.phase = 0.0
+        self.float_time = 0.0
+        self.activity = 0.0
+        self._last = self._since = time.monotonic()
+        self._state = None
+        self._animate = motion_enabled() if animate is None else animate
+        self._frame_key = None
+        self._image = None
+
+    def render(self, state, now=None):
+        now = time.monotonic() if now is None else now
+        if state != self._state:
+            self._state, self._since = state, now
+        mode = STATE_MODE.get(state, STATE_MODE["idle"])
+        if state == "idle" and now - self._since >= 30:
+            mode = STATE_MODE["sleeping"]
+
+        dt = min(.1, max(0, now - self._last))
+        self._last = now
+        if self._animate and state != "stopped":
+            self.phase += dt * SPEED[mode]
+            self.float_time += dt
+            active = state in ("thinking", "acting")
+            self.activity += (active - self.activity) * (1 - math.exp(-4 * dt))
+            wave = (1 - math.cos(self.float_time * math.pi / 2)) / 2
+            self.lift = -round(min(4, self.orb.D * .035) * self.activity * wave)
+
+        key = mode, self.phase, self.lift
+        if key != self._frame_key:
+            frame = Image.new("RGBA", (self.size, self.size))
+            frame.alpha_composite(self.orb.render(mode, self.phase), (4, 4 + self.lift))
+            self._frame_key, self._image = key, frame
+        return self._image

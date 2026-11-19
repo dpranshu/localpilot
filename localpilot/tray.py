@@ -19,7 +19,7 @@ import threading
 from PIL import Image, ImageDraw
 
 from .config import Config
-from .agent import run as run_agent
+from .agent import UnfinishedRun, run as run_agent
 from . import llm
 
 cfg = Config()
@@ -78,7 +78,8 @@ def _run_task(goal: str):
         try:
             _notify("LocalPilot", f"Running ({cfg.backend}): {goal[:60]}\nFocus your target window now.")
             final = run_agent(goal, cfg)
-            _notify("LocalPilot - done", final[:160])
+            status = "stopped" if isinstance(final, UnfinishedRun) else "done"
+            _notify(f"LocalPilot - {status}", final[:160])
         except Exception as e:
             _notify("LocalPilot - error", str(e)[:160])
         finally:

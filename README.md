@@ -340,7 +340,90 @@ python run.py --backend vision --confirm "search for cats on the page"
   switch this. Use `--vision-probe` to see raw vs mapped coords and pick the right one.
 - `--model <tag>` overrides the vision model; set the default in `config.py` (`vision_model`).
 
+## Memory: your history and personal context
+
+LocalPilot remembers. Every task you run is recorded on this PC (`%APPDATA%\LocalPilot\memory.json`):
+the goal, whether it succeeded, how long it took and the steps it took. When you start a new task,
+the agent is given a short **personal context**:
+
+- **your own notes** -- set them with **My context…** in the panel (e.g. *"My browser is Brave. I like
+  Punjabi music."*);
+- the **most similar past tasks** -- what worked, step by step (a recipe to reuse), and what didn't
+  finish (so it doesn't repeat the same mistake). Long flailing runs are compacted (`type x (x4)`).
+
+Open **History…** in the panel to see every task (newest first, OK / -- stopped / X failed), click one
+to see its steps, **Run again** (or double-click) to repeat it, **Delete** one, or **Clear all**. Turn
+memory off with the **Use my history** checkbox. Passwords, card/PIN fields and long digit runs are
+never stored. Nothing leaves the PC.
+
+### How it knows a task actually succeeded
+
+Memory is only useful if "success" is true, so a run only counts as successful when:
+
+1. **Goal check** -- whenever one of its actions changes the window, a second, strict model call asks
+   *"is the whole goal accomplished on this screen?"* (search results do not count as "playing a
+   video"). It ends the task as soon as the answer is yes, instead of flailing on.
+2. **On-screen evidence** -- a "done" (from the goal check *or* the model itself) is only accepted if
+   the goal's specific words (names, apps, sites) are actually visible -- typo-tolerant, so
+   *"wikipidia … networth"* still matches *"Wikipedia … Net worth"*. A "done" without evidence is
+   sent back once, then the task is reported as unfinished rather than falsely successful.
+3. **Focus pin** -- if another program grabs the foreground without the agent opening or clicking
+   into it, the agent never acts there; it switches back to its own window (and stops if that keeps
+   happening).
+
+> Measured on the same two Brave/YouTube tasks: before these fixes the first task flailed for 10
+> steps and failed (and once typed into the wrong app); after, it finished in **3 steps**, and the
+> similar follow-up task -- now with that recipe in its context -- finished in **2 steps**.
+
+### Everyday-task battery (real screen, verified by checking the actual app state)
+
+| Task | Round 1 | Round 4 (after fixes) |
+|---|---|---|
+| Open Calculator and calculate 25 times 4 | ✗ typed into a button | ✓ display shows 100 |
+| Open Notepad and type a note | ✓ but typed into an old tab | ✓ new blank tab, 2 steps |
+| Open Brave and go to wikipedia.org | ✓ 3 steps | ✓ 2 steps |
+| Open Settings and go to the Bluetooth page | ✗ dragged back by focus pin | ✓ |
+| Open File Explorer and go to Downloads | ✗ | ✓ 2 steps |
+
+What changed to get there: "Open X…" goals open X first (known apps/folders only); the agent only
+follows focus to a window its own action created, never to an already-open app; documents with
+text are appended to, not wiped; apps without a text box (Calculator) receive keystrokes; result
+displays are visible to the model; a URL is always submitted; settings pages open directly
+(`ms-settings:bluetooth`); simple math goals are checked exactly in code.
+
 ## Safety
+
+### The harness: it asks before anything consequential
+
+Every action passes through a permission gate (`localpilot/harness.py`) before it runs. If the
+action would **pay / buy / check out, send, delete / remove / uninstall, publish / post, sign out**,
+or **type into a password / card / PIN field** (or type a card-like number), LocalPilot pauses and
+shows a dialog:
+
+| Button | Effect |
+|---|---|
+| **Yes** | allow this one action |
+| **No** | skip it -- the agent is told it was refused and must find another way or finish |
+| **Cancel** | stop the task |
+
+While the dialog is up, the overlay still highlights the exact button it wants to press. If no
+dialog can be shown, the task stops (fail-safe). Dry runs never prompt. Every decision is logged
+(`"event": "harness"`). Turn it off with the panel's **Ask before risky actions** checkbox or
+`--no-harness` (not recommended).
+
+It matches the **control's name** (text brain) or the **model's own description of its target**
+(vision brain), whole words only, and deliberately skips words that also name everyday buttons
+(Notepad's *Format* menu, *Reset*, *Share*), so it doesn't nag. Add your own rules in `config.py`:
+`harness_extra_sensitive=("archive",)` asks first, `harness_block=("amazon",)` is never allowed.
+
+The prompt also tells the model that on-screen text is **untrusted data**, not instructions -- the
+harness is the backstop if a web page tries to talk it into something.
+
+> Tested end-to-end on a local test shop: the agent chose **Place order**, the dialog appeared;
+> **Cancel** left the page untouched, **Yes** placed the order -- and when the model then tried to
+> click **Place order a second time**, the harness asked again, and **No** prevented a duplicate order.
+
+### Other guards
 
 - Hard `max_steps` cap (default 40) prevents runaway loops.
 - `--dry-run` and `--confirm` let you watch its reasoning before trusting it.

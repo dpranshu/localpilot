@@ -1,10 +1,14 @@
 """The agent loop: perceive -> think -> act, with a kill-switch and logging."""
 from __future__ import annotations
 
+from dataclasses import replace
+from threading import Event
+
 import ctypes
 import json
 import os
 import sys
+import re as _re
 import time
 from datetime import datetime
 
@@ -16,6 +20,8 @@ except Exception:
     pass
 
 from . import llm, actions
+from .harness import Harness, SKIP, STOP, target_name
+from .notepad import NewNotepadText
 from .perception import perceive
 from .overlay import Overlay, NullOverlay
 from .config import Config, DEFAULT
@@ -39,12 +45,19 @@ def _key_down(vk: int) -> bool:
     return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
 
 
-def _stop_requested(cfg) -> bool:
-    ev = getattr(cfg, "stop_event", None)
-    try:
-        return ev is not None and ev.is_set()
-    except Exception:
-        return False
+class UnfinishedRun(str):
+    """An unsuccessful run result that remains printable for existing callers."""
+
+
+class _RunStopped(Exception):
+    pass
+
+
+def _check_stop(cfg):
+    if cfg.stop_event.is_set():
+        raise _RunStopped("stopped by user")
+    if _key_down(cfg.kill_key_vk):
+        raise _RunStopped("aborted by user (F12)")
 
 
 _CHROME_NAMES = {"Minimize", "Maximize", "Restore", "Close", "System", "Application"}
@@ -112,12 +125,54 @@ def run(goal: str, cfg: Config | None = None) -> str:
     sees the screen. The initializer is entered here so every caller is covered.
     """
     import uiautomation as _auto
-    with _auto.UIAutomationInitializerInThread():
-        return _run_impl(goal, cfg)
+    cfg = cfg or DEFAULT
+    mem, steps, t0 = None, [], time.time()
+    if cfg.use_memory:
+        try:
+            from .memory import Memory, summarize_event
+            mem = Memory(cfg.memory_path or None)
+            context = mem.context_for(goal)
+            hide_next = [False]
+            user_cb = cfg.log_callback
+
+            def record(rec):                       # collect steps, then pass events on
+                try:
+                    if rec.get("event") == "harness" and "field" in str(rec.get("note", "")):
+                        hide_next[0] = True
+                    line = summarize_event(rec)
+                    if line:
+                        if hide_next[0] and rec.get("event") == "action":
+                            line, hide_next[0] = line.split(" ")[0] + " [hidden]", False
+                        steps.append(line)
+                except Exception:
+                    pass
+                if user_cb:
+                    user_cb(rec)
+            cfg = replace(cfg, user_context=context, log_callback=record)
+            if context:
+                print("[memory] using personal context:\n  " + context.replace("\n", "\n  "))
+        except Exception as e:
+            print(f"(memory unavailable: {e})")
+            mem = None
+    final = None
+    try:
+        with _auto.UIAutomationInitializerInThread():
+            final = _run_impl(goal, cfg)
+        return final
+    finally:
+        if mem is not None:
+            try:
+                mem.add_run(goal, final if final is not None else UnfinishedRun("error: crashed"),
+                            steps, cfg.backend, time.time() - t0)
+            except Exception as e:
+                print(f"(could not save history: {e})")
 
 
 def _run_impl(goal: str, cfg: Config | None = None) -> str:
     cfg = cfg or DEFAULT
+
+    if cfg.stop_event is None:
+        cfg = replace(cfg, stop_event=Event())
 
     if cfg.backend == "vision":
         from .vision import run_vision
@@ -129,19 +184,17 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
     logger = Logger(cfg)
     logger.log({"event": "start", "goal": goal, "model": cfg.model})
 
-    up, msg = llm.ping(cfg)
-    print(msg)
-    logger.log({"event": "ping", "ok": up, "message": msg})
-    if not up:
-        return f"Aborted: {msg}"
+    notepad = NewNotepadText.from_goal(goal)
+    if notepad is None:
+        up, msg = llm.ping(cfg)
+        print(msg)
+        logger.log({"event": "ping", "ok": up, "message": msg})
+        if not up:
+            final = UnfinishedRun(f"Aborted: {msg}")
+            logger.log({"event": "end", "final": final})
+            return final
 
     # Live viewer
-    # one stop event per run (so the orb's right-click "Stop task" works from the CLI too)
-    if getattr(cfg, "stop_event", None) is None:
-        import threading
-        cfg.stop_event = threading.Event()
-    cfg.stop_event.clear()
-
     overlay = Overlay(cfg) if cfg.show_overlay else NullOverlay()
     if cfg.show_overlay and not overlay.ok:
         print("(overlay unavailable; continuing without it)")
@@ -158,7 +211,8 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
     time.sleep(3)
 
     history: list[str] = []
-    final = "max steps reached"
+    final = UnfinishedRun("max steps reached")
+    harness = Harness(cfg)              # permission gate in front of every action
 
     # Hybrid state
     vision_mod = None
@@ -168,14 +222,21 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
     vision_sticky = 0
     addr_armed = False          # True right after ctrl+l -> auto-Enter on next type
     last_sig = None
+    prev_title = None           # goal check runs when the screen (window title) changes
+    prev_rendered = None
+    last_kind = ""
+    acted = False
+    work_hwnd = work_pid = None # the app the agent is working in (focus pin)
+    windows_before = None       # top-level windows that existed before our last action
+    just_opened = ""            # app name our last action asked to open
+    auto_app = actions.app_from_goal(goal) if notepad is None else None
+    drift = 0
+    done_rejects = 0
     repeat = 0
 
     try:
         for step in range(1, cfg.max_steps + 1):
-            if _key_down(cfg.kill_key_vk) or _stop_requested(cfg):
-                final = "aborted by user (F12)" if _key_down(cfg.kill_key_vk) else "stopped by user"
-                logger.log({"event": "abort", "step": step})
-                break
+            _check_stop(cfg)
 
             try:
                 title, elements, rendered = perceive(cfg)
@@ -183,6 +244,77 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                 logger.log({"event": "error", "message": f"perceive failed: {e}"})
                 time.sleep(cfg.settle_seconds)
                 continue
+
+            if notepad is not None:
+                logger.log({"event": "step", "step": step, "title": title, "mode": "uia"})
+                if cfg.dry_run:
+                    final = "Dry run: open a new Notepad tab, type the text, and verify it"
+                    break
+                if cfg.confirm_each_step:
+                    input("Proceed with the next Notepad step? Press Enter to allow...")
+                try:
+                    action, result = notepad.step(title, elements, cfg, _check_stop)
+                except _RunStopped:
+                    raise
+                except Exception as exc:
+                    final = UnfinishedRun(f"stopped: {exc}")
+                    overlay.stopped(final)
+                    break
+                logger.log({"event": "action", "step": step, "action": action,
+                            "result": str(result), "mode": "uia"})
+                if result.done:
+                    final = result.detail
+                    overlay.done(final)
+                    break
+                time.sleep(cfg.settle_seconds)
+                continue
+
+            # Focus pin: if another program took the foreground without us opening or
+            # clicking into it, never act there -- switch back to our window instead.
+            fg_hwnd, fg_pid = _fg_window()
+
+            # "Open X ..." goals: open X first, deterministically (known apps only), so the
+            # model never starts by typing into whatever window happens to be in front.
+            if auto_app and step == 1 and not cfg.dry_run:
+                windows_before, just_opened = _top_windows(), auto_app
+                res = actions._launch_app(auto_app)
+                work_hwnd, work_pid = fg_hwnd, fg_pid
+                logger.log({"event": "action", "step": step, "result": str(res), "mode": "uia",
+                            "action": {"action": "open_app", "name": auto_app, "say": "auto"}})
+                history.append(f"step {step}: open_app {auto_app} -> {res}")
+                acted = acted or res.ok
+                time.sleep(max(cfg.settle_seconds, 1.5))
+                continue
+
+            # Focus pin: follow focus ONLY to a window our last action created, or to the
+            # app it asked to open. An already-open app (an IDE, chat, browser) that comes
+            # to the front is never adopted -- a real run once typed into Android Studio.
+            legit_switch = (windows_before is not None and fg_hwnd not in windows_before) or                            _title_matches(title, just_opened)
+            if work_pid is not None and fg_pid != work_pid and not legit_switch:
+                drift += 1
+                logger.log({"event": "focus_drift", "step": step, "title": title, "count": drift})
+                if drift > 2 or not _restore_focus(work_hwnd):
+                    final = UnfinishedRun(f"stopped: focus left the target app (now '{title[:40]}')")
+                    overlay.stopped(final); break
+                history.append(f"step {step}: focus jumped to '{title[:40]}', which is not your "
+                               "target app; LocalPilot switched back. Continue in the target app.")
+                time.sleep(cfg.settle_seconds)
+                continue
+            drift = 0
+
+            # Goal check: after one of OUR actions changed the screen, ask whether the goal
+            # is already met -- stops the agent from flailing after it has succeeded.
+            changed = (title != prev_title) or (
+                last_kind in ("type", "type_text") and rendered != prev_rendered)
+            if (cfg.verify_goal and acted and prev_title is not None and changed
+                    and not cfg.dry_run):
+                met, why = llm.check_goal(cfg, goal, title, rendered)
+                logger.log({"event": "goal_check", "step": step, "title": title,
+                            "done": met, "why": why})
+                if met:
+                    final = f"done: {why or 'goal reached'}"
+                    overlay.done(final[:60]); time.sleep(1.0); break
+            prev_title, prev_rendered = title, rendered
 
             content = _count_content(elements)
 
@@ -214,6 +346,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                     logger.log({"event": "error", "message": f"vision: {e}"})
                     time.sleep(cfg.settle_seconds)
                     continue
+                _check_stop(cfg)
                 xy = vaction.get("xy")
                 vlabel = f"[vision] {vaction.get('action')}" + (f" {xy}" if xy else "")
                 if xy:
@@ -223,13 +356,41 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                     overlay.think(f"[vision] {vlabel}", vaction.get("thought", "")[:40])
                 if cfg.confirm_each_step:
                     input(f"  about to run (vision) {vaction.get('action')} {xy or ''} -- Enter...")
+                _check_stop(cfg)
                 if vaction.get("action") == "done":
+                    missing = (llm.goal_missing_terms(goal, title, rendered)
+                               if cfg.verify_goal and not cfg.dry_run else [])
+                    if missing and done_rejects < 1:
+                        done_rejects += 1
+                        history.append(f"step {step}: you answered done, but the screen does not "
+                                       f"show {', '.join(missing)} yet. Keep going.")
+                        time.sleep(cfg.settle_seconds); continue
+                    if missing:
+                        final = UnfinishedRun("stopped: the model said done, but "
+                                              f"{', '.join(missing)} is not visible on screen")
+                        overlay.stopped(final); break
                     final = vaction.get("say", "done")
                     overlay.done(final[:60]); time.sleep(1.2); break
+                gate = _apply_harness(harness, vaction, None, step, logger, overlay, history)
+                _check_stop(cfg)
+                if gate == STOP:
+                    final = UnfinishedRun(f"stopped: you declined -- {history[-1]}")
+                    overlay.stopped(final); break
+                if gate == SKIP:
+                    text_stall += 1
+                    time.sleep(cfg.settle_seconds); overlay.clear(); continue
                 _drive_cursor(cfg, overlay, xy, vaction.get("action"), vaction.get("dir"))
-                res = vision_mod.execute_vision(cfg, vaction)
+                _check_stop(cfg)
+                windows_before, just_opened = _top_windows(), ""
+                try:
+                    res = vision_mod.execute_vision(cfg, vaction)
+                except Exception as e:
+                    res = f"action error: {type(e).__name__}: {e}"
                 logger.log({"event": "action", "step": step, "result": res, "mode": "vision"})
                 history.append(f"step {step}: [vision] {vaction.get('action')} {xy or ''} -> {res}")
+                acted = True
+                if not str(res).startswith("action error"):
+                    work_hwnd, work_pid = fg_hwnd, fg_pid
             else:
                 try:
                     action = llm.decide(cfg, goal, title, rendered, history)
@@ -239,13 +400,17 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                     text_stall += 1
                     time.sleep(cfg.settle_seconds)
                     continue
+                _check_stop(cfg)
                 akind = action.get("action")
                 # Auto-submit: typing right after ctrl+l (address bar) -> append Enter,
                 # so navigation works even if the model forgets the trailing newline.
-                if addr_armed and akind in ("type", "type_text"):
-                    t = str(action.get("text", ""))
-                    if not t.endswith("\n"):
-                        action["text"] = t + "\n"
+                t = str(action.get("text", ""))
+                looks_url = bool(_re.fullmatch(
+                    r"(https?://|www\.)\S+|[\w-]+(\.[\w-]+)*\.(com|org|net|io|in|edu|gov|co|dev|ai|app)(/\S*)?",
+                    t.strip(), _re.IGNORECASE))
+                if (addr_armed or looks_url) and akind in ("type", "type_text") \
+                        and t.strip() and not t.endswith("\n"):
+                    action["text"] = t + "\n"          # a URL is always meant to be opened
                 addr_armed = (akind == "hotkey"
                               and "ctrl" in str(action.get("keys", "")).lower()
                               and str(action.get("keys", "")).lower().replace(" ", "").endswith("+l"))
@@ -261,7 +426,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                         vision_sticky = cfg.hybrid_vision_sticky
                         text_stall = 0; repeat = 0
                         time.sleep(cfg.settle_seconds); continue
-                    final = "stopped: repeated the same action with no progress"
+                    final = UnfinishedRun("stopped: repeated the same action with no progress")
                     logger.log({"event": "stop", "step": step, "reason": "repeat"})
                     overlay.done("no further progress"); time.sleep(1.0); break
 
@@ -271,24 +436,61 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                 overlay.act(rect, label, say)
                 if cfg.confirm_each_step:
                     input(f"  about to run {action} -- press Enter to allow, Ctrl+C to stop...")
+                gate = _apply_harness(harness, action, elements, step, logger, overlay, history)
+                _check_stop(cfg)
+                if gate == STOP:
+                    final = UnfinishedRun(f"stopped: you declined -- {history[-1]}")
+                    overlay.stopped(final); break
+                if gate == SKIP:
+                    if cfg.backend == "hybrid":
+                        text_stall += 1
+                    time.sleep(cfg.settle_seconds); overlay.clear(); continue
                 center = (((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
                           if rect else None)
+                _check_stop(cfg)
                 _drive_cursor(cfg, overlay, center, action.get("action"), action.get("dir"))
-                result = actions.execute(cfg, action, elements)
-                logger.log({"event": "action", "step": step,
-                            "action": action, "result": str(result), "mode": "uia"})
+                _check_stop(cfg)
+                windows_before = _top_windows()
+                just_opened = str(action.get("name", "")) if akind == "open_app" else ""
+                try:
+                    result = actions.execute(cfg, action, elements)
+                except Exception as e:             # one bad action must not kill the task
+                    result = actions.ActionResult(False, f"action error: {type(e).__name__}: {e}")
+                logger.log({"event": "action", "step": step, "action": action,
+                            "target": target_name(action, elements),
+                            "result": str(result), "mode": "uia"})
                 history.append(f"step {step}: {action.get('action')} "
                                f"{action.get('id', action.get('keys',''))} -> {result}")
+                acted = acted or result.ok
+                last_kind = akind
                 if cfg.backend == "hybrid":
-                    text_stall = 0 if _text_is_progress(action, rect) else text_stall + 1
+                    text_stall = 0 if result.ok and _text_is_progress(action, rect) else text_stall + 1
+                if result.ok and akind not in ("wait", "done"):
+                    work_hwnd, work_pid = fg_hwnd, fg_pid
                 if result.done:
+                    missing = (llm.goal_missing_terms(goal, title, rendered)
+                               if cfg.verify_goal and not cfg.dry_run else [])
+                    if missing:
+                        done_rejects += 1
+                        logger.log({"event": "done_rejected", "step": step, "missing": missing})
+                        if done_rejects >= 2:
+                            final = UnfinishedRun("stopped: the model said done, but "
+                                                  f"{', '.join(missing)} is not visible on screen")
+                            overlay.stopped(final); break
+                        history.append(f"step {step}: you answered done, but the screen does not "
+                                       f"show {', '.join(missing)} yet. Keep going; answer done only "
+                                       "when the goal is visible.")
+                        time.sleep(cfg.settle_seconds); overlay.clear(); continue
                     final = result.detail
                     overlay.done(result.detail[:60]); time.sleep(1.4); break
 
             time.sleep(cfg.settle_seconds)
             overlay.clear()
         else:
-            overlay.done("finished")
+            overlay.stopped(final)
+    except _RunStopped as exc:
+        final = UnfinishedRun(str(exc))
+        logger.log({"event": "abort", "step": step})
     finally:
         if final.startswith("aborted"):
             try:
@@ -302,6 +504,83 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
     print(f"\n=== FINISHED: {final} ===")
     print(f"Log: {logger.path}")
     return final
+
+
+def _fg_window():
+    """(hwnd, pid) of the current foreground window."""
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    u.GetForegroundWindow.restype = wintypes.HWND
+    h = u.GetForegroundWindow()
+    pid = wintypes.DWORD()
+    u.GetWindowThreadProcessId(h, ctypes.byref(pid))
+    return h, pid.value
+
+
+def _top_windows() -> set:
+    """Handles of all visible top-level windows right now."""
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    found = set()
+    proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def cb(h, _):
+        if u.IsWindowVisible(h):
+            found.add(h)
+        return True
+    u.EnumWindows(proc(cb), 0)
+    return found
+
+
+def _title_matches(title: str, app: str) -> bool:
+    """Does this window look like the app we asked to open? ('file explorer' ~ 'Home - File Explorer')"""
+    import re as _re
+    if not app:
+        return False
+    words = [w for w in _re.findall(r"[a-z]+", app.lower()) if len(w) >= 4 and w != "settings"]
+    t = (title or "").lower()
+    if "settings" in app.lower() and "settings" in t:
+        return True
+    return bool(words) and any(w in t for w in words)
+
+
+def _restore_focus(hwnd) -> bool:
+    """Bring our working window back to the front. True if it is in front afterwards."""
+    if not hwnd:
+        return False
+    from ctypes import wintypes
+    u, k = ctypes.windll.user32, ctypes.windll.kernel32
+    u.GetForegroundWindow.restype = wintypes.HWND
+    if not u.IsWindow(hwnd):
+        return False
+    try:
+        cur = u.GetForegroundWindow()
+        t1 = u.GetWindowThreadProcessId(cur, None)
+        t2 = k.GetCurrentThreadId()
+        u.AttachThreadInput(t1, t2, True)
+        u.ShowWindow(hwnd, 9)                      # SW_RESTORE if minimized
+        u.SetForegroundWindow(hwnd)
+        u.BringWindowToTop(hwnd)
+        u.AttachThreadInput(t1, t2, False)
+        time.sleep(0.3)
+        return u.GetForegroundWindow() == hwnd
+    except Exception:
+        return False
+
+
+def _apply_harness(harness, action, elements, step, logger, overlay, history) -> str:
+    """Run the permission gate; log it and tell the model. Returns allow/skip/stop."""
+    decision, note = harness.review(action, elements)
+    if not note:
+        return decision
+    logger.log({"event": "harness", "step": step, "decision": decision,
+                "note": note, "action": action})
+    if decision == SKIP:
+        history.append(f"step {step}: SKIPPED -- the user did not allow this ({note}). "
+                       "Do not try it again; find another way, or answer done.")
+        overlay.status("skipped: not allowed")
+    elif decision == STOP:
+        history.append(note)
+    return decision
 
 
 def _action_label(action: dict) -> str:

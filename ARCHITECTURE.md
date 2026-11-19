@@ -360,9 +360,15 @@ There is **no log viewer / replay UI** — logs are read by hand.
 step caps · repeat guard · PyAutoGUI corner failsafe · local-only (no network except localhost) ·
 overlay never steals focus (so a stray click can't silently retarget the agent).
 
-❌ **Gaps:** no guard for risky actions (pay/send/delete/submit) · no app/domain allow-list ·
-on-screen text is fed straight into the prompt (**prompt-injection from web pages is possible**) ·
-the agent can act on whatever window happens to be focused (see P0-2).
+✅ **Harness permission gate** (`harness.py`, added after this snapshot): every action is classified
+before it runs; pay / send / delete / publish / sign-out clicks and password / card typing pop a
+Yes (allow) / No (skip) / Cancel (stop) dialog; fail-safe stop if it can't ask; user block-list and
+extra-sensitive words; the prompt now marks on-screen text as untrusted. Covers the text brain, the
+vision brain inside hybrid, and the standalone vision loop. 12 unit/loop tests + real E2E in Brave.
+
+❌ **Gaps:** no app/domain allow-list yet · the gate is keyword-based (an oddly-labelled "Pay" button,
+e.g. an icon with no name, can slip past it; vision-brain coverage depends on the model naming its
+target) · the agent can act on whatever window happens to be focused (see P0-2).
 
 ---
 
@@ -379,7 +385,7 @@ Scale: ■ built · □ missing. (5 = excellent). Ratings are my honest read of 
 | **Decide (reasoning)** | ■■□□□ | purely reactive 7B; fragments long strings; flaky |
 | **Safety** | ■■□□□ | good kill/confirm controls; no risky-action guard, no injection defence |
 | **Finish / verify** | ■□□□□ | model self-declares "done" and often doesn't; only a repeat-guard backstops it |
-| **Memory / learning** | ■□□□□ | last 8 action strings only; nothing persists across tasks |
+| **Memory / learning** | ■■■□□ | persistent per-user history + notes, similar-task recall, History window (memory.py) |
 | **Planning** | ■□□□□ | no plan or sub-goals |
 | **Testing / observability** | ■□□□□ | JSONL logs; **no test suite in the repo** |
 | **Voice in/out** | □□□□□ | none |
@@ -420,9 +426,9 @@ Legend — **Impact** H/M/L · **Effort** S (hours) / M (a day) / L (days) · **
 
 | ID | Problem (evidence) | Idea | Impact | Effort | Lands in |
 |---|---|---|:-:|:-:|---|
-| **P0-1** | **Task completion is unreliable.** After typing correctly the model often re-types instead of answering `done` — **3 of the last 5 Notepad runs** did (2 of them ended only via the repeat guard, leaving a stray leading space). `done` is self-declared; nothing verifies the goal. | (a) feed a **"what changed" signal** after each action (control values before/after); (b) cheap **deterministic checks** for common goals (typed text now in Document value; URL/title contains query); (c) a tiny second LLM call "is the goal satisfied? yes/no"; (d) few-shot finish examples in the prompt | H | M | `agent.py`, `prompts.py`, `perception.py` |
-| **P0-2** | **Focus drift:** runs acted on whatever window was foreground — my tests typed into the *Claude* chat and clicked its Files button. | **Pin the target window** (hwnd) at step 1; re-activate before each step; refuse/ask if the foreground changed to an unrelated app | H | M | `agent.py`, `perception.py` |
-| **P0-3** | **No risky-action guard; prompt-injection possible.** Page text goes straight into the prompt; the agent will click Pay/Send/Delete. | confirm-before for sensitive verbs (pay/buy/send/delete/submit/password), app/domain allow-list, wrap on-screen text as *untrusted data* in the prompt | H | M | `actions.py`, `agent.py`, `prompts.py`, `config.py` |
+| **P0-1** 🟡 *partly done: goal check + on-screen evidence (llm.check_goal / goal_missing_terms)* | **Task completion is unreliable.** After typing correctly the model often re-types instead of answering `done` — **3 of the last 5 Notepad runs** did (2 of them ended only via the repeat guard, leaving a stray leading space). `done` is self-declared; nothing verifies the goal. | (a) feed a **"what changed" signal** after each action (control values before/after); (b) cheap **deterministic checks** for common goals (typed text now in Document value; URL/title contains query); (c) a tiny second LLM call "is the goal satisfied? yes/no"; (d) few-shot finish examples in the prompt | H | M | `agent.py`, `prompts.py`, `perception.py` |
+| **P0-2** 🟡 *partly done: focus pin (agent._fg_window / _restore_focus)* | **Focus drift:** runs acted on whatever window was foreground — my tests typed into the *Claude* chat and clicked its Files button. | **Pin the target window** (hwnd) at step 1; re-activate before each step; refuse/ask if the foreground changed to an unrelated app | H | M | `agent.py`, `perception.py` |
+| **P0-3** ✅ *done (harness.py)* | **No risky-action guard; prompt-injection possible.** Page text goes straight into the prompt; the agent will click Pay/Send/Delete. | confirm-before for sensitive verbs (pay/buy/send/delete/submit/password), app/domain allow-list, wrap on-screen text as *untrusted data* in the prompt | H | M | `actions.py`, `agent.py`, `prompts.py`, `config.py` |
 | **P0-4** | **No automated tests.** Everything was checked with throw-away scripts. | `tests/`: `parse_action`, `map_point` (+crop), hybrid decision, repeat guard, JSON extraction, overlay hit-test; one slow Notepad e2e | H | S–M | new `tests/` |
 | P0-5 | `.exe` is **blocked by Smart App Control** and stale. | sign it, or ship an installer that uses the signed Python launcher; rebuild after signing | M | M | packaging |
 
@@ -431,7 +437,7 @@ Legend — **Impact** H/M/L · **Effort** S (hours) / M (a day) / L (days) · **
 | ID | Problem | Idea | Impact | Effort | Lands in |
 |---|---|---|:-:|:-:|---|
 | P1-1 | **Purely reactive**; long strings get fragmented across steps (URL split into two `type` calls) | tiny **plan first** (3–6 bullets) → each step tagged with the plan item; replan on failure | H | M | `agent.py`, `prompts.py` |
-| P1-2 | **Memory = last 8 action strings**; `history_len` config is unused (hard-coded 8 / 4) | wire `history_len`; add rolling summary + "tried and failed" list | M | S | `prompts.py`, `vision.py`, `config.py` |
+| P1-2 ✅ *done: memory.py + history_len wired* | **Memory = last 8 action strings**; `history_len` config is unused (hard-coded 8 / 4) | wire `history_len`; add rolling summary + "tried and failed" list | M | S | `prompts.py`, `vision.py`, `config.py` |
 | P1-3 | **70-control cap in tree-walk order**, not relevance; duplicate Button/TreeItem pairs seen in Claude's tree | rank (visible, in-viewport, named, interactive first), dedupe, show scroll position | M | M | `perception.py` |
 | P1-4 | **Two near-duplicate loops** (`agent._run_impl` and `vision.run_vision`); e.g. the vision branch inside hybrid has no repeat detector | one loop + a `Brain` interface (`decide(state) → Action`, `execute(action)`) | M | M | `agent.py`, `vision.py` |
 | P1-5 | **Latency**: text 4–9 s/step; per-step sleeps (settle 0.8 + cursor 0.35 + overlay); text model has **no `keep_alive`** (cold load 88 s after idle) | `keep_alive` for the text model; batch obvious sequences (`ctrl+L` + URL + Enter in one step); trim prompt; stream JSON | M | S–M | `llm.py`, `actions.py`, `agent.py` |

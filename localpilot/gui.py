@@ -18,7 +18,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from .config import Config
-from .agent import run as run_agent
+from .agent import UnfinishedRun, run as run_agent
 from . import llm
 
 try:
@@ -64,10 +64,16 @@ class App:
         self.cfg.stop_event = self.stop_event
         self.logq: "queue.Queue[dict]" = queue.Queue()
         self.cfg.log_callback = self.logq.put
+        from .memory import Memory
+        self.memory = Memory(self.cfg.memory_path or None)
+        self._hist_win = None
+        self._hist_runs = []
         self.running = False
         self._orb_state = "idle"
         self.orb = DotSphere(diameter=72, margin=6) if _HAS_ORB else None
         self._orb_photo = None
+        self._orb_frame = None
+        self._orb_idle_timer = None
         self.cfg.open_app_callback = lambda: self.logq.put({"event": "_show"})
         self._build()
 
@@ -141,7 +147,8 @@ class App:
         ttk.Label(sf, text="Model").grid(row=0, column=2, sticky="w", padx=(16, 0))
         self.model = tk.Entry(sf, bg="#1f1f29", fg=FG, insertbackground=FG, relief="flat", width=26)
         self.model.insert(0, self.cfg.model)
-        self.model.grid(row=0, column=3, sticky="w", padx=6, ipady=3)
+        sf.columnconfigure(3, weight=1)
+        self.model.grid(row=0, column=3, sticky="ew", padx=6, ipady=3)
         ttk.Label(sf, text="Max steps").grid(row=0, column=4, sticky="w", padx=(16, 0))
         self.steps = tk.Spinbox(sf, from_=1, to=200, width=5, bg="#1f1f29", fg=FG,
                                 relief="flat", buttonbackground="#1f1f29")
@@ -156,10 +163,16 @@ class App:
         self.v_overlay = tk.BooleanVar(value=self.cfg.show_overlay)
         self.v_dry = tk.BooleanVar(value=self.cfg.dry_run)
         self.v_real = tk.BooleanVar(value=self.cfg.real_cursor)
-        for text, var in [("Confirm each step", self.v_confirm), ("Agent cursor", self.v_cursor),
-                          ("Overlay", self.v_overlay), ("Dry run", self.v_dry),
-                          ("Real cursor", self.v_real)]:
-            ttk.Checkbutton(tg, text=text, variable=var).pack(side="left", padx=(0, 12))
+        self.v_harness = tk.BooleanVar(value=self.cfg.harness_enabled)
+        self.v_mem = tk.BooleanVar(value=self.cfg.use_memory)
+        toggles = [("Ask before risky actions", self.v_harness), ("Use my history", self.v_mem),
+                   ("Confirm each step", self.v_confirm), ("Dry run", self.v_dry),
+                   ("Agent cursor", self.v_cursor), ("Overlay", self.v_overlay),
+                   ("Real cursor", self.v_real)]
+        # grid, 4 per row: a single packed row overflowed and hid the last toggles
+        for i, (text, var) in enumerate(toggles):
+            ttk.Checkbutton(tg, text=text, variable=var).grid(
+                row=i // 4, column=i % 4, sticky="w", padx=(0, 14), pady=1)
 
         # status (tk.Label so we can color it)
         self.status = tk.Label(self.root, text="Ready.", bg=BG, fg=SUBTLE,
@@ -168,7 +181,6 @@ class App:
 
         # log
         lf = tk.Frame(self.root, bg=BG)
-        lf.pack(fill="both", expand=True, padx=10, pady=8)
         self.log = tk.Text(lf, bg="#0f0f16", fg=FG, relief="flat", wrap="word",
                            font=("Consolas", 9), state="disabled")
         self.log.pack(side="left", fill="both", expand=True)
@@ -178,10 +190,13 @@ class App:
 
         # bottom
         bf = tk.Frame(self.root, bg=BG)
-        bf.pack(fill="x", padx=10, pady=(0, 10))
+        bf.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
         ttk.Button(bf, text="Check Ollama", command=self.on_check).pack(side="left")
         ttk.Button(bf, text="Clear log", command=self.clear_log).pack(side="left", padx=6)
+        ttk.Button(bf, text="History…", command=self.open_history).pack(side="left")
+        ttk.Button(bf, text="My context…", command=self.open_context).pack(side="left", padx=6)
         ttk.Button(bf, text="Quit", command=self.on_quit).pack(side="right")
+        lf.pack(fill="both", expand=True, padx=10, pady=8)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_quit)
         self.root.bind("<Escape>", lambda e: self.on_stop())
@@ -228,6 +243,91 @@ class App:
         self.cfg.show_overlay = self.v_overlay.get()
         self.cfg.dry_run = self.v_dry.get()
         self.cfg.real_cursor = self.v_real.get()
+        self.cfg.harness_enabled = self.v_harness.get()
+        self.cfg.use_memory = self.v_mem.get()
+
+    # ---------- history & personal context ----------
+    def open_history(self):
+        if self._hist_win is not None and self._hist_win.winfo_exists():
+            self._hist_win.lift(); self.refresh_history(); return
+        w = tk.Toplevel(self.root); w.title("LocalPilot - History"); w.configure(bg=BG)
+        w.geometry("760x460"); self._hist_win = w
+        tk.Label(w, text="Your task history (stored only on this PC). Similar past tasks are "
+                 "used as context.", bg=BG, fg=SUBTLE, anchor="w").pack(fill="x", padx=10, pady=(8, 2))
+        body = tk.Frame(w, bg=BG); body.pack(fill="both", expand=True, padx=10, pady=4)
+        self.hist_list = tk.Listbox(body, bg="#0f0f16", fg=FG, selectbackground="#2b4a7a",
+                                    relief="flat", font=("Consolas", 9), width=52, activestyle="none")
+        self.hist_list.pack(side="left", fill="y")
+        self.hist_list.bind("<<ListboxSelect>>", lambda e: self._show_run())
+        self.hist_list.bind("<Double-Button-1>", lambda e: self.run_again())
+        self.hist_detail = tk.Text(body, bg="#0f0f16", fg=FG, relief="flat", wrap="word",
+                                   font=("Consolas", 9), state="disabled")
+        self.hist_detail.pack(side="left", fill="both", expand=True, padx=(8, 0))
+        bar = tk.Frame(w, bg=BG); bar.pack(fill="x", padx=10, pady=(2, 10))
+        ttk.Button(bar, text="Run again", command=self.run_again).pack(side="left")
+        ttk.Button(bar, text="Delete", command=self.delete_run).pack(side="left", padx=6)
+        ttk.Button(bar, text="Clear all", command=self.clear_history).pack(side="left")
+        self.hist_count = tk.Label(bar, bg=BG, fg=SUBTLE); self.hist_count.pack(side="right")
+        self.refresh_history()
+
+    def refresh_history(self):
+        if self._hist_win is None or not self._hist_win.winfo_exists():
+            return
+        self._hist_runs = self.memory.runs()
+        self.hist_list.delete(0, "end")
+        mark = {"success": "OK ", "stopped": "-- ", "failed": "X  "}
+        for r in self._hist_runs:
+            self.hist_list.insert("end", f"{mark.get(r['outcome'], '?  ')}{r['ts'][5:]}  {r['goal'][:40]}")
+        ok = sum(r["outcome"] == "success" for r in self._hist_runs)
+        self.hist_count.config(text=f"{len(self._hist_runs)} tasks, {ok} succeeded")
+        self._set_detail("Select a task to see its steps. Double-click to run it again.")
+
+    def _selected_run(self):
+        sel = self.hist_list.curselection() if self._hist_win else ()
+        return self._hist_runs[sel[0]] if sel else None
+
+    def _set_detail(self, text):
+        self.hist_detail.config(state="normal"); self.hist_detail.delete("1.0", "end")
+        self.hist_detail.insert("end", text); self.hist_detail.config(state="disabled")
+
+    def _show_run(self):
+        r = self._selected_run()
+        if r:
+            steps = "\n".join(f"  {i}. {s}" for i, s in enumerate(r["steps"], 1)) or "  (none)"
+            self._set_detail(f"{r['goal']}\n\n{r['ts']}  |  {r['outcome'].upper()}  |  "
+                             f"{r['backend']}  |  {r['duration_s']}s\nResult: {r['final']}\n\nSteps:\n{steps}")
+
+    def run_again(self):
+        r = self._selected_run()
+        if r and not self.running:
+            self._clear_ph(); self.task.delete(0, "end"); self.task.insert(0, r["goal"])
+            self.on_run()
+
+    def delete_run(self):
+        r = self._selected_run()
+        if r:
+            self.memory.delete(r["id"]); self.refresh_history()
+
+    def clear_history(self):
+        from tkinter import messagebox
+        if messagebox.askyesno("Clear history", "Delete all task history? This cannot be undone.",
+                               parent=self._hist_win):
+            self.memory.clear(); self.refresh_history()
+
+    def open_context(self):
+        w = tk.Toplevel(self.root); w.title("LocalPilot - My context"); w.configure(bg=BG)
+        w.geometry("520x320")
+        tk.Label(w, text="Notes about you that every task can use (stored only on this PC).\n"
+                 "e.g.  My browser is Brave.  I like Punjabi music.  My email app is Outlook.",
+                 bg=BG, fg=SUBTLE, justify="left").pack(anchor="w", padx=10, pady=(10, 4))
+        txt = tk.Text(w, bg="#0f0f16", fg=FG, insertbackground=FG, relief="flat",
+                      wrap="word", font=("Segoe UI", 10))
+        txt.pack(fill="both", expand=True, padx=10)
+        txt.insert("1.0", self.memory.preferences())
+        def save():
+            self.memory.set_preferences(txt.get("1.0", "end"))
+            self.set_status("Saved your context.", "ok"); w.destroy()
+        ttk.Button(w, text="Save", command=save).pack(anchor="e", padx=10, pady=8)
 
     # ---------- actions ----------
     def on_run(self):
@@ -240,6 +340,9 @@ class App:
         self._apply()
         self.stop_event.clear()
         self.running = True
+        if self._orb_idle_timer is not None:
+            self.root.after_cancel(self._orb_idle_timer)
+            self._orb_idle_timer = None
         self._orb_state = "thinking"
         self.run_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
@@ -251,7 +354,7 @@ class App:
             try:
                 final = run_agent(goal, self.cfg)
             except Exception as e:
-                final = f"error: {e}"
+                final = UnfinishedRun(f"error: {e}")
             self.logq.put({"event": "_final", "final": final})
         threading.Thread(target=worker, daemon=True).start()
 
@@ -294,10 +397,11 @@ class App:
                     self.run_btn.config(state="normal")
                     self.stop_btn.config(state="disabled")
                     final = rec.get("final", "done")
-                    bad = final.startswith(("stopped", "aborted", "error", "Aborted"))
+                    bad = isinstance(final, UnfinishedRun)
                     self._orb_state = "stopped" if bad else "done"
                     self.set_status(final, "err" if bad else "ok")
-                    self.root.after(2600, self._idle_orb)
+                    self._orb_idle_timer = self.root.after(2600, self._idle_orb)
+                    self.refresh_history()
                     try:
                         self.root.deiconify()
                     except Exception:
@@ -314,16 +418,20 @@ class App:
             pass
 
     def _idle_orb(self):
+        self._orb_idle_timer = None
         if not self.running:
             self._orb_state = "idle"
 
     def _animate_orb(self):
-        if not self.orb:
+        if not self.orb or not self.root.winfo_viewable():
             return
         try:
-            img = self.orb.render(self._orb_state)         # white-dot sphere, transparent bg
+            img = self.orb.render(self._orb_state)
+            if img is self._orb_frame:
+                return
             self._orb_photo = ImageTk.PhotoImage(img)
             self.orb_label.config(image=self._orb_photo)
+            self._orb_frame = img
         except Exception:
             pass
 

@@ -227,6 +227,12 @@ def decide_vision(cfg, goal: str, history: list[str]):
     if cfg.vision_terse:
         system += ("\n- Keep the Thought to ONE short sentence.\n"
                    "- When the task is already accomplished, output finished() immediately.")
+    # UI-TARS is Qwen-based and sometimes answers finished(content=...) in Chinese;
+    # the Thought language was forced, the answer text was not.
+    system += f"\n- Write finished(content='...') in {cfg.language}, never in another language."
+    if getattr(cfg, "user_context", ""):
+        system += ("\n\n## Personal context (this user's past tasks and notes; the screen wins)\n"
+                   + cfg.user_context[:1200])
     msgs = [{"role": "system", "content": system}]
     # brief textual history of prior actions (keeps context small for 8 GB)
     for h in history[-4:]:
@@ -285,13 +291,14 @@ def execute_vision(cfg, action: dict) -> str:
 
 # ---------------- loop ----------------
 def run_vision(goal: str, cfg) -> str:
-    from .agent import Logger, _key_down
+    from .agent import Logger, UnfinishedRun, _check_stop, _RunStopped, _apply_harness
+    from .harness import Harness, SKIP, STOP
     from .overlay import Overlay, NullOverlay
 
     ok, msg = ping_vision(cfg)
     print(msg)
     if not ok:
-        return f"Aborted: {msg}"
+        return UnfinishedRun(f"Aborted: {msg}")
 
     logger = Logger(cfg)
     logger.log({"event": "start", "goal": goal, "model": cfg.vision_model, "backend": "vision"})
@@ -299,26 +306,19 @@ def run_vision(goal: str, cfg) -> str:
     print("Hold F12 to stop. Starting in 3s -- switch to your target window...")
     time.sleep(3)
 
-    if getattr(cfg, "stop_event", None) is None:
-        import threading
-        cfg.stop_event = threading.Event()
-    cfg.stop_event.clear()
-
     overlay = Overlay(cfg) if cfg.show_overlay else NullOverlay()
     if cfg.show_overlay and not overlay.ok:
         overlay = NullOverlay()
 
     history: list[str] = []
-    final = "max steps reached"
+    final = UnfinishedRun("max steps reached")
+    harness = Harness(cfg)
     max_steps = cfg.vision_max_steps or cfg.max_steps
     last_sig = None
     repeat = 0
     try:
-        from .agent import _stop_requested
         for step in range(1, max_steps + 1):
-            if _key_down(cfg.kill_key_vk) or _stop_requested(cfg):
-                final = "stopped by user" if _stop_requested(cfg) else "aborted by user (F12)"
-                break
+            _check_stop(cfg)
             overlay.think(f"[vision] step {step}/{max_steps}  (F12 to stop)")
             try:
                 action, raw, screen_wh = decide_vision(cfg, goal, history)
@@ -326,6 +326,7 @@ def run_vision(goal: str, cfg) -> str:
                 logger.log({"event": "error", "message": str(e)})
                 time.sleep(cfg.settle_seconds); continue
 
+            _check_stop(cfg)
             xy = action.get("xy")
             label = action.get("action", "?") + (f" {xy}" if xy else "")
             if xy:
@@ -339,6 +340,7 @@ def run_vision(goal: str, cfg) -> str:
             if cfg.confirm_each_step:
                 input(f"  about to run {action.get('action')} {xy or ''} -- Enter to allow...")
 
+            _check_stop(cfg)
             if action.get("action") == "done":
                 final = action.get("say", "done")
                 overlay.done(final[:60]); time.sleep(1.2); break
@@ -353,9 +355,17 @@ def run_vision(goal: str, cfg) -> str:
                 repeat = 0
             last_sig = sig
             if repeat + 1 >= cfg.vision_stop_on_repeat:
-                final = "stopped: repeated the same action with no progress"
+                final = UnfinishedRun("stopped: repeated the same action with no progress")
                 logger.log({"event": "stop", "reason": "no-progress", "sig": str(sig)})
                 overlay.done("no further progress"); time.sleep(1.0); break
+
+            gate = _apply_harness(harness, action, None, step, logger, overlay, history)
+            _check_stop(cfg)
+            if gate == STOP:
+                final = UnfinishedRun(f"stopped: you declined -- {history[-1]}")
+                overlay.stopped(final); break
+            if gate == SKIP:
+                time.sleep(cfg.settle_seconds); overlay.clear(); continue
 
             if cfg.show_cursor and xy:
                 overlay.cursor_move(xy[0], xy[1])
@@ -364,13 +374,20 @@ def run_vision(goal: str, cfg) -> str:
                     overlay.click_burst()
                 elif action.get("action") == "scroll":
                     overlay.scroll_hint(action.get("dir", "down"))
-            res = execute_vision(cfg, action)
+            _check_stop(cfg)
+            try:
+                res = execute_vision(cfg, action)
+            except Exception as e:
+                res = f"action error: {type(e).__name__}: {e}"
             logger.log({"event": "action", "step": step, "result": res})
             history.append(f"Thought: {action.get('thought','')}\nAction: {action.get('action')}")
             time.sleep(cfg.settle_seconds)
             overlay.clear()
         else:
-            overlay.done("finished")
+            overlay.stopped(final)
+    except _RunStopped as exc:
+        final = UnfinishedRun(str(exc))
+        logger.log({"event": "abort", "step": step})
     finally:
         if final.startswith("aborted"):
             overlay.stopped(final); time.sleep(0.8)

@@ -41,7 +41,7 @@ BANNER_BG = "#101014"
 # Premium liquid-orb face (PIL-rendered). Falls back to the vector avatar if unavailable.
 try:
     from PIL import ImageTk
-    from .orb import Orb, STATE_MODE, PALETTES, SPEED
+    from .orb import AnimatedOrb, STATE_MODE, PALETTES
     _HAS_ORB = True
 except Exception:
     _HAS_ORB = False
@@ -176,9 +176,9 @@ class TkOverlay:
             self.ax = self.sw - 120
             self.ay = self.sh - 150
             # premium orb face (PIL-rendered)
-            self.orb = Orb(diameter=126, key=(1, 1, 1)) if _HAS_ORB else None
+            self.orb = AnimatedOrb(diameter=126, margin=30) if _HAS_ORB else None
             self._photo = None
-            self._phase = 0.0
+            self._orb_frame = None
             self._ok = True
         except Exception:
             self._ready.set(); return
@@ -227,17 +227,19 @@ class TkOverlay:
             data = cmd[2]
             if "step" in data:
                 self._step = data["step"]
-            if "rect" in data:
-                self._rect = data["rect"]
-            if "label" in data:
-                self._label = data["label"]
-            if "say" in data and data["say"]:
-                self._say = data["say"]
+            self._rect = data.get("rect")
+            self._label = data.get("label", "")
+            self._say = data.get("say", "")
+            if self._state in ("done", "stopped"):
+                self._step = ""
+                self._cur_pos = self._cur_target = None
 
     def _tick(self):
         if self._closed:
             return
         self._drain()
+        if self._closed:
+            return
         self._frame += 1
         try:
             self._draw()
@@ -255,7 +257,7 @@ class TkOverlay:
         f = self._frame
         state = self._state
         if _HAS_ORB and self.orb is not None:
-            mode = STATE_MODE.get(state, 5)
+            mode = STATE_MODE.get(state, STATE_MODE["idle"])
             accent = PALETTES[mode][2]            # bright accent from the orb's palette
         else:
             mode = 5
@@ -295,7 +297,7 @@ class TkOverlay:
 
         # --- the AI face: premium orb (or vector fallback) ---
         if _HAS_ORB and self.orb is not None:
-            self._orb_draw(self.ax, self.ay, mode, accent, f)
+            self._orb_draw(self.ax, self.ay, state)
         else:
             self._avatar(self.ax, self.ay, accent, state, f)
 
@@ -367,20 +369,12 @@ class TkOverlay:
                               fill=accent if on else C_IDLE, outline="")
 
 
-    def _orb_draw(self, x, y, mode, accent, f):
-        c = self.canvas
-        # advance the liquid motion at this state's speed
-        self._phase += max(0.02, SPEED[mode % len(SPEED)] * 0.11)
-        # gentle float bob
-        lift = int(-4 * (0.5 + 0.5 * math.sin(f * 0.07)))
-        D = self.orb.D
-        # soft drop shadow ellipse under it
-        c.create_oval(x - D * 0.34, y + D * 0.52, x + D * 0.34, y + D * 0.60,
-                      fill="#060608", outline="")
-        # the rendered orb (glow halo is baked into the image)
-        img = self.orb.render(mode, self._phase)
-        self._photo = ImageTk.PhotoImage(img)      # keep a ref (else GC'd)
-        c.create_image(x, y + lift, image=self._photo)   # centered at (x, y)
+    def _orb_draw(self, x, y, state):
+        img = self.orb.render(state)
+        if img is not self._orb_frame:
+            self._photo = ImageTk.PhotoImage(img)
+            self._orb_frame = img
+        self.canvas.create_image(x, y, image=self._photo)
 
     def _cursor_draw(self, accent, f):
         if self._cur_pos is None or self._cur_target is None:
@@ -428,7 +422,7 @@ def Overlay(cfg=None):
     """Create the best available overlay.
 
     Prefers the per-pixel-alpha HUD (truly transparent, no black halo / box over any
-    background; draggable dot-sphere face with a right-click menu). Falls back to the
+    background; draggable gradient orb with a right-click menu). Falls back to the
     tkinter color-key overlay if the layered-window HUD can't start. Both share the same
     API and never take focus. `cfg` supplies stop_event / open_app_callback / orb_size.
     """

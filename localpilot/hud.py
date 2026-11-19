@@ -7,10 +7,8 @@ Two layered windows share one render thread:
      pointer line and the agent's own cursor. Clicks (including the agent's own) pass
      straight through it.
 
-  2. ORB window - small, holds the agent's face (halftone white-dot sphere). It is NOT
-     click-through, but layered windows are hit-tested by alpha: fully transparent pixels
-     let the mouse through, and the sphere carries an alpha=1 (invisible) disc, so only the
-     ball itself receives the mouse.
+  2. ORB window - small, holds the gradient orb. Layered windows are hit-tested
+     by alpha, so fully transparent pixels let the mouse through.
        - drag it anywhere (position is remembered between runs)
        - right-click -> Stop task / Open LocalPilot app / Reset position
      It never takes focus (WS_EX_NOACTIVATE + MA_NOACTIVATE), so interacting with it does
@@ -210,9 +208,9 @@ class _Layered:
     def present(self, img: Image.Image):
         """img: RGBA straight alpha, size (w, h) -> premultiplied BGRA -> window.
         Position is left unchanged (pptDst = NULL) so dragging never snaps back."""
-        pm = img.convert("RGBa")
-        r, g, b, a = pm.split()
-        raw = Image.merge("RGBa", (b, g, r, a)).tobytes()
+        if img.size != (self.w, self.h):
+            raise ValueError("Layered window image must match the window size")
+        raw = img.convert("RGBa").tobytes("raw", "BGRa")
         ctypes.memmove(self._bits, raw, len(raw))
         user32.UpdateLayeredWindow(self.hwnd, self._screen_dc, None, ctypes.byref(self._size),
                                    self._mem_dc, ctypes.byref(self._pt_src), 0,
@@ -243,7 +241,7 @@ _POS_FILE = os.path.join(os.environ.get("APPDATA", "."), "LocalPilot", "orb_pos.
 
 
 class HudOverlay:
-    """Per-pixel-alpha HUD + draggable dot-sphere face with a right-click menu."""
+    """Per-pixel-alpha HUD with a draggable orb and a right-click menu."""
 
     def __init__(self, cfg=None):
         self._cfg = cfg
@@ -264,6 +262,7 @@ class HudOverlay:
         self._scroll_dir = "down"
         self._drag = None
         self._blank_sent = False
+        self._main_key = None
         self.last_frame_ms = 0.0
         self.menu_log = []                                # for tests / debugging
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -311,11 +310,11 @@ class HudOverlay:
     # ---------------- geometry ----------------
     def _center(self):
         l, t, r, b = self._orb.rect()
-        return (l + r) / 2, (t + b) / 2
+        return (l + r) / 2, (t + b) / 2 + self.sphere.lift
 
     def _default_pos(self):
         S = self.sphere.size
-        return self.W - S - 24, self.H - S - 64
+        return self._clamp(self.W - S - 24, self.H - S - 64)
 
     def _clamp(self, x, y):
         S = self.sphere.size
@@ -343,6 +342,7 @@ class HudOverlay:
         self.W = user32.GetSystemMetrics(0)
         self.H = user32.GetSystemMetrics(1)
         size = getattr(self._cfg, "orb_size", 150) or 150
+        size = max(16, min(int(size), min(self.W, self.H) - 32))
         self.sphere = DotSphere(diameter=size)
         ex_main = (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE |
                    WS_EX_TOOLWINDOW | WS_EX_TOPMOST)
@@ -463,10 +463,11 @@ class HudOverlay:
             return
         self._ready.set()
         msg = wintypes.MSG()
-        last_top = time.time()
+        last_top = time.monotonic()
+        last_image = None
         try:
             while not self._closed:
-                t0 = time.time()
+                t0 = time.monotonic()
                 while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
                     user32.TranslateMessage(ctypes.byref(msg))
                     user32.DispatchMessageW(ctypes.byref(msg))
@@ -475,15 +476,18 @@ class HudOverlay:
                     break
                 self._frame += 1
                 try:
-                    self._orb.present(self.sphere.render(self._state))     # always animating
+                    image = self.sphere.render(self._state, now=t0)
+                    if image is not last_image:
+                        self._orb.present(image)
+                        last_image = image
                     self._present_main()
                 except Exception:
                     pass
-                if time.time() - last_top > 1.0:           # stay above other topmost windows
+                if t0 - last_top > 1.0:                   # stay above other topmost windows
                     self._main.raise_topmost()
                     self._orb.raise_topmost()
-                    last_top = time.time()
-                dt = time.time() - t0
+                    last_top = t0
+                dt = time.monotonic() - t0
                 self.last_frame_ms = dt * 1000
                 time.sleep(max(0.004, 0.040 - dt))
         finally:
@@ -511,12 +515,12 @@ class HudOverlay:
                     d = cmd[2]
                     if "step" in d:
                         self._step = d["step"]
-                    if "rect" in d:
-                        self._rect = d["rect"]
-                    if "label" in d:
-                        self._label = d["label"]
-                    if d.get("say"):
-                        self._say = d["say"]
+                    self._rect = d.get("rect")
+                    self._label = d.get("label", "")
+                    self._say = d.get("say", "")
+                    if self._state in ("done", "stopped"):
+                        self._step = ""
+                        self._cur_pos = self._cur_target = None
         except queue.Empty:
             pass
 
@@ -529,9 +533,14 @@ class HudOverlay:
             if not self._blank_sent:                       # nothing to draw: send one blank frame
                 self._main.present(Image.new("RGBA", (self.W, self.H), (0, 0, 0, 0)))
                 self._blank_sent = True
+                self._main_key = None
             return
         self._blank_sent = False
-        self._main.present(self._compose())
+        animated = (self._state == "acting" and self._rect) or self._cur_pos
+        key = (self._state, self._step, self._say, self._center() if self._say else None)
+        if animated or key != self._main_key:
+            self._main.present(self._compose())
+            self._main_key = None if animated else key
 
     def _text(self, d, xy, s, fill=(255, 255, 255, 255), font=None, anchor="la"):
         d.text(xy, s, font=font or self.f_txt, fill=fill, anchor=anchor,

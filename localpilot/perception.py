@@ -69,7 +69,15 @@ def _is_actionable(control) -> bool:
     if ctn in NOISY_IF_TEXT and not name:
         return False
     if ctn == "TextControl":
-        # Only keep text that is interactive (has Invoke pattern) or named & small.
+        # Result / status displays (Calculator's "Display is 100", progress text) are
+        # read-only but the model must SEE them, or it types blindly and never knows
+        # it is finished. Keep them; drop other plain labels to keep the list short.
+        try:
+            aid = (control.AutomationId or "").lower()
+        except Exception:
+            aid = ""
+        if name and any(k in aid for k in ("result", "display", "status", "output", "answer")):
+            return True
         try:
             if not control.GetInvokePattern() and not control.GetSelectionItemPattern():
                 return False

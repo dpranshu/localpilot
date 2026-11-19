@@ -15,6 +15,11 @@ class Config:
     max_elements: int = 70                        # UI nodes sent to the model per step
     settle_seconds: float = 0.8                   # wait after each action for UI to update
     history_len: int = 8                          # recent actions fed back to the model
+    verify_goal: bool = True                      # when the window title changes, ask "is the goal met?"
+    # Personal memory: past runs + the user's own notes, recalled for similar tasks
+    use_memory: bool = True
+    memory_path: str = ""                         # "" = %APPDATA%\LocalPilot\memory.json
+    user_context: str = ""                        # filled per run from memory (not a user knob)
 
     # --- Perception ---
     max_tree_depth: int = 28                      # how deep to walk the UIA tree
@@ -25,6 +30,12 @@ class Config:
     pyautogui_failsafe: bool = True               # slam mouse to a screen corner to abort
     confirm_each_step: bool = False               # if True, press Enter in console before each act
     dry_run: bool = False                         # plan + log actions but do NOT execute them
+    # Harness (permission gate): ask before paying, sending, deleting, publishing,
+    # signing out, or typing a password / card number. Yes=allow, No=skip, Cancel=stop.
+    harness_enabled: bool = True
+    harness_extra_sensitive: tuple = ()           # extra words that should also ask first
+    harness_block: tuple = ()                     # words that are never allowed (no prompt)
+    harness_confirm_callback: object = None       # callable(desc) -> "allow"/"skip"/"stop" or bool
 
     # --- Live viewer ---
     show_overlay: bool = True          # transparent on-screen highlight of each action

@@ -95,7 +95,9 @@ class DotSphere:
         self.angle += self._v * dt
         self.wave += wspeed * dt
 
-    def render(self, state: str = "idle", advance: bool = True) -> Image.Image:
+    lift = 0      # vertical float offset the HUD reads; the dot sphere spins in place
+
+    def render(self, state: str = "idle", advance: bool = True, now=None) -> Image.Image:
         if advance:
             self.step(state)
         S, R = self.S, self.R

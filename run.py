@@ -12,7 +12,7 @@ import sys
 
 from localpilot.config import Config
 from localpilot import llm
-from localpilot.agent import run
+from localpilot.agent import UnfinishedRun, run
 from localpilot.perception import perceive
 
 
@@ -28,6 +28,8 @@ def main():
     p.add_argument("--real-cursor", action="store_true",
                    help="physically move+click the OS cursor for UIA actions (more visible)")
     p.add_argument("--screenshots", action="store_true", help="save a PNG of each step")
+    p.add_argument("--no-harness", action="store_true",
+                   help="do NOT ask before risky actions (pay/send/delete/post/passwords)")
     p.add_argument("--backend", choices=["uia", "vision", "hybrid"], default=None,
                    help="uia = text tree (default); vision = UI-TARS; hybrid = auto-switch per step")
     p.add_argument("--coord-space", choices=["image", "norm1000"], default=None,
@@ -58,6 +60,8 @@ def main():
         cfg.real_cursor = True
     if args.screenshots:
         cfg.save_screenshots = True
+    if args.no_harness:
+        cfg.harness_enabled = False
     if args.backend:
         cfg.backend = args.backend
     if args.coord_space:
@@ -110,7 +114,8 @@ def main():
     goal = " ".join(args.goal).strip()
     if not goal:
         p.error("provide a goal, or use --check / --probe / --interactive")
-    run(goal, cfg)
+    if isinstance(run(goal, cfg), UnfinishedRun):
+        sys.exit(1)
 
 
 if __name__ == "__main__":
