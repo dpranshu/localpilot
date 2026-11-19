@@ -60,6 +60,8 @@ def _fmt(rec: dict) -> str | None:
 class App:
     def __init__(self):
         self.cfg = Config()
+        from . import settings as _settings
+        _settings.load_into(self.cfg)           # remember the user's choices
         self.stop_event = threading.Event()
         self.cfg.stop_event = self.stop_event
         self.logq: "queue.Queue[dict]" = queue.Queue()
@@ -80,7 +82,8 @@ class App:
     # ---------- UI ----------
     def _build(self):
         self.root = tk.Tk()
-        self.root.title("LocalPilot")
+        from . import __version__
+        self.root.title(f"LocalPilot {__version__}")
         self.root.configure(bg=BG)
         self.root.geometry("600x600")
         self.root.minsize(520, 480)
@@ -191,16 +194,19 @@ class App:
         # bottom
         bf = tk.Frame(self.root, bg=BG)
         bf.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
-        ttk.Button(bf, text="Check Ollama", command=self.on_check).pack(side="left")
+        ttk.Button(bf, text="Check setup", command=self.on_check).pack(side="left")
+        self.fix_btn = ttk.Button(bf, text="Start AI engine", command=self.on_start_engine)
         ttk.Button(bf, text="Clear log", command=self.clear_log).pack(side="left", padx=6)
         ttk.Button(bf, text="History…", command=self.open_history).pack(side="left")
         ttk.Button(bf, text="My context…", command=self.open_context).pack(side="left", padx=6)
-        ttk.Button(bf, text="Quit", command=self.on_quit).pack(side="right")
+        self._quit_btn = ttk.Button(bf, text="Quit", command=self.on_quit)
+        self._quit_btn.pack(side="right")
         lf.pack(fill="both", expand=True, padx=10, pady=8)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_quit)
         self.root.bind("<Escape>", lambda e: self.on_stop())
         self.root.after(120, self._drain)
+        self.root.after(500, self.on_check)     # first-run / startup health check
 
     # ---------- helpers ----------
     def _show_ph(self):
@@ -338,6 +344,8 @@ class App:
             self.set_status("Type a task first.", "err")
             return
         self._apply()
+        from . import settings as _settings
+        _settings.save_from(self.cfg)
         self.stop_event.clear()
         self.running = True
         if self._orb_idle_timer is not None:
@@ -365,11 +373,40 @@ class App:
         self.set_status("Stopping after this step…", "info")
 
     def on_check(self):
-        ok, msg = llm.ping(self.cfg)
-        self.set_status(msg, "ok" if ok else "err")
-        self.append(msg)
+        self._apply()
+        threading.Thread(target=self._health_worker, daemon=True).start()
+
+    def _health_worker(self):
+        from . import health
+        state, msg = health.check(self.cfg)
+        self.logq.put({"event": "_health", "state": state, "message": msg})
+
+    def _show_health(self, state, msg):
+        self.set_status(msg, "ok" if state == "ok" else "err")
+        if state != "ok":
+            self.append(f"[setup] {msg}")
+        if state == "not_running":
+            self.fix_btn.pack(side="left", padx=6, before=self._quit_btn)
+        else:
+            self.fix_btn.pack_forget()
+        self.run_btn.config(state="normal" if state == "ok" and not self.running else
+                            ("disabled" if self.running else "normal"))
+
+    def on_start_engine(self):
+        from . import health
+        if health.start_ollama():
+            self.set_status("Starting the AI engine...", "info")
+            self.root.after(5000, self.on_check)
+        else:
+            self.set_status("Could not start the AI engine. Run install.bat.", "err")
 
     def on_quit(self):
+        try:
+            self._apply()
+            from . import settings as _settings
+            _settings.save_from(self.cfg)
+        except Exception:
+            pass
         self.stop_event.set()
         try:
             self.root.destroy()
@@ -381,6 +418,9 @@ class App:
             while True:
                 rec = self.logq.get_nowait()
                 e = rec.get("event")
+                if e == "_health":
+                    self._show_health(rec["state"], rec["message"])
+                    continue
                 if e == "_show":                           # orb menu: "Open LocalPilot app"
                     try:
                         self.root.deiconify()

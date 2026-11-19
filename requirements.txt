@@ -1,6 +1,5 @@
 uiautomation>=2.0.20
 comtypes>=1.2.0
 requests>=2.31.0
-pyautogui>=0.9.54
 pillow>=10.0.0
 pystray>=0.19.5

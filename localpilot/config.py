@@ -27,7 +27,7 @@ class Config:
 
     # --- Safety ---
     kill_key_vk: int = 0x7B                       # F12 = emergency stop between steps
-    pyautogui_failsafe: bool = True               # slam mouse to a screen corner to abort
+    mouse_failsafe: bool = True                   # mouse into the top-left corner aborts
     confirm_each_step: bool = False               # if True, press Enter in console before each act
     dry_run: bool = False                         # plan + log actions but do NOT execute them
     # Harness (permission gate): ask before paying, sending, deleting, publishing,

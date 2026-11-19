@@ -190,12 +190,12 @@ class FixTests(unittest.TestCase):
             pass
         el = SimpleNamespace(id=4, role="Button", name="Go", enabled=True, rect=(0, 0, 1, 1),
                              control=ButtonLike())
-        with patch.object(actions, "pyautogui") as pg:              # Button: keys go to the app
+        with patch.object(actions, "inputs") as pg:              # Button: keys go to the app
             res = actions.execute(Config(), {"action": "type", "id": 4, "text": "25*4="}, [el])
         self.assertTrue(res.ok)
         pg.write.assert_called_once_with("25*4=", interval=0.03)
         menu = SimpleNamespace(**{**el.__dict__, "role": "Menu"})  # menus: never stray keys
-        with patch.object(actions, "pyautogui") as pg:
+        with patch.object(actions, "inputs") as pg:
             res = actions.execute(Config(), {"action": "type", "id": 4, "text": "x"}, [menu])
         self.assertFalse(res.ok)
         pg.write.assert_not_called()

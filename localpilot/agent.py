@@ -178,8 +178,8 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
         from .vision import run_vision
         return run_vision(goal, cfg)
 
-    if actions._HAS_PYAUTOGUI and cfg.pyautogui_failsafe:
-        actions.pyautogui.FAILSAFE = True  # slam mouse to a corner to abort
+    if cfg.mouse_failsafe:
+        actions.inputs.FAILSAFE = True  # mouse into the top-left corner aborts
 
     logger = Logger(cfg)
     logger.log({"event": "start", "goal": goal, "model": cfg.model})
@@ -607,9 +607,9 @@ def _drive_cursor(cfg, overlay, xy, action_kind, direction=None):
     if not cfg.show_cursor or not xy:
         return
     overlay.cursor_move(xy[0], xy[1])
-    if cfg.real_cursor and actions._HAS_PYAUTOGUI:
+    if cfg.real_cursor and actions._HAS_INPUT:
         try:
-            actions.pyautogui.moveTo(xy[0], xy[1], duration=cfg.cursor_move_time)
+            actions.inputs.moveTo(xy[0], xy[1], duration=cfg.cursor_move_time)
         except Exception:
             time.sleep(cfg.cursor_move_time)
     else:
@@ -622,7 +622,7 @@ def _drive_cursor(cfg, overlay, xy, action_kind, direction=None):
 
 def _save_shot(shot_dir, step):
     try:
-        import pyautogui
-        pyautogui.screenshot().save(os.path.join(shot_dir, f"step_{step:03d}.png"))
+        from . import inputs
+        inputs.screenshot().save(os.path.join(shot_dir, f"step_{step:03d}.png"))
     except Exception:
         pass

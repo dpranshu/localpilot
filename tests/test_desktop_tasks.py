@@ -153,7 +153,7 @@ class ExecutionTests(unittest.TestCase):
             self.assertIsInstance(agent._run_impl("a general task",Config(max_steps=0,show_overlay=False)), agent.UnfinishedRun)
 
     def test_vision_dry_run(self):
-        with patch("pyautogui.click") as click:
+        with patch("localpilot.inputs.click") as click:
             result = vision.execute_vision(Config(dry_run=True), {"action":"click","xy":(1,2)})
             self.assertIn("DRY-RUN", result)
             click.assert_not_called()

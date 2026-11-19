@@ -8,11 +8,9 @@ from __future__ import annotations
 import time
 import uiautomation as auto
 
-try:
-    import pyautogui
-    _HAS_PYAUTOGUI = True
-except Exception:
-    _HAS_PYAUTOGUI = False
+from . import inputs          # Windows SendInput (no GPL deps; types any language)
+
+_HAS_INPUT = True
 
 
 class ActionResult:
@@ -150,11 +148,11 @@ def _launch_app(name: str) -> ActionResult:
             except Exception as e:
                 return ActionResult(False, f"launch failed: {e}")
     # 3) universal fallback: Start-menu search (what a human does)
-    if _HAS_PYAUTOGUI:
+    if _HAS_INPUT:
         try:
-            pyautogui.press("win"); time.sleep(0.7)
-            pyautogui.typewrite(name, interval=0.03); time.sleep(1.0)
-            pyautogui.press("enter"); time.sleep(0.6)
+            inputs.press("win"); time.sleep(0.7)
+            inputs.typewrite(name, interval=0.03); time.sleep(1.0)
+            inputs.press("enter"); time.sleep(0.6)
             return ActionResult(True, f"start-menu launched '{name}'")
         except Exception as e:
             return ActionResult(False, f"start-menu launch failed: {e}")
@@ -164,13 +162,13 @@ def _launch_app(name: str) -> ActionResult:
 def _fresh_notepad_tab() -> str:
     """Windows 11 Notepad reopens your last tabs (a real run typed into an old tab).
     Give the agent a new blank tab so it never edits an existing document."""
-    if not _HAS_PYAUTOGUI:
+    if not _HAS_INPUT:
         return ""
     import uiautomation as auto
     for _ in range(20):
         fg = auto.GetForegroundControl()
         if fg is not None and "Notepad" in (fg.Name or ""):
-            pyautogui.hotkey("ctrl", "n"); time.sleep(0.5)
+            inputs.hotkey("ctrl", "n"); time.sleep(0.5)
             return " (opened a new blank tab)"
         time.sleep(0.2)
     return ""
@@ -264,13 +262,13 @@ def execute(cfg, action: dict, elements) -> ActionResult:
 
     if kind == "type_text":
         text = str(action.get("text", ""))
-        if not _HAS_PYAUTOGUI:
-            return ActionResult(False, "type_text needs pyautogui")
+        if not _HAS_INPUT:
+            return ActionResult(False, "type_text needs keyboard input")
         submit = text.endswith("\n")
-        pyautogui.write(text.rstrip("\n"), interval=0.02)
+        inputs.write(text.rstrip("\n"), interval=0.02)
         if submit:
             time.sleep(0.2)
-            pyautogui.press("enter")
+            inputs.press("enter")
         return ActionResult(True, f"type_text {_shown(text)}{' + Enter' if submit else ''}")
 
     if kind == "hotkey":
@@ -278,9 +276,9 @@ def execute(cfg, action: dict, elements) -> ActionResult:
         if not keys:
             return ActionResult(False, "hotkey missing 'keys'")
         try:
-            if _HAS_PYAUTOGUI:
+            if _HAS_INPUT:
                 parts = [p.strip().lower() for p in keys.replace("-", "+").split("+") if p.strip()]
-                pyautogui.hotkey(*parts)
+                inputs.hotkey(*parts)
             else:
                 auto.SendKeys(_keys_to_uia(keys))
             return ActionResult(True, f"hotkey {keys}")
@@ -310,10 +308,10 @@ def execute(cfg, action: dict, elements) -> ActionResult:
         if el is None:
             return ActionResult(False, f"no control with id {eid} this step")
         if kind == "click":
-            if getattr(cfg, "real_cursor", False) and _HAS_PYAUTOGUI:
+            if getattr(cfg, "real_cursor", False) and _HAS_INPUT:
                 cx = (el.rect[0] + el.rect[2]) // 2
                 cy = (el.rect[1] + el.rect[3]) // 2
-                pyautogui.click(cx, cy)
+                inputs.click(cx, cy)
                 how = f"real-click @({cx},{cy})"
             else:
                 how = _click_control(el.control)
@@ -328,32 +326,32 @@ def execute(cfg, action: dict, elements) -> ActionResult:
                 # Apps like Calculator have no text box; they take keystrokes. For a plain
                 # Button, send the keys to the app (the foreground window we perceived).
                 # Never for menus/tabs/lists: stray keys there can trigger shortcuts.
-                if el.role != "Button" or not _HAS_PYAUTOGUI:
+                if el.role != "Button" or not _HAS_INPUT:
                     return ActionResult(False, f"control [{eid}] ({el.role}) does not accept text")
-                pyautogui.write(body, interval=0.03)
+                inputs.write(body, interval=0.03)
                 if submit:
-                    pyautogui.press("enter")
+                    inputs.press("enter")
                 return ActionResult(True, f"type [{eid}] <- {_shown(text)} -> {el.role} takes no "
                                           "text, so the keys were sent to the app instead")
             try:
                 if (el.role == "Document" and (getattr(el, "value", "") or "").strip()
-                        and not submit and _HAS_PYAUTOGUI):
+                        and not submit and _HAS_INPUT):
                     # Never wipe a document that already has content (SetValue replaces
                     # everything): add the text at the end instead.
                     el.control.SetFocus(); time.sleep(0.15)
-                    pyautogui.hotkey("ctrl", "end")
-                    pyautogui.write(body, interval=0.02)
+                    inputs.hotkey("ctrl", "end")
+                    inputs.write(body, interval=0.02)
                     how = "appended at the end (existing content kept)"
-                elif submit and _HAS_PYAUTOGUI:
+                elif submit and _HAS_INPUT:
                     el.control.SetFocus()
                     time.sleep(0.15)
                     if not el.control.HasKeyboardFocus:
                         raise RuntimeError("target editor does not have keyboard focus")
-                    pyautogui.typewrite(body, interval=0.02)
+                    inputs.typewrite(body, interval=0.02)
                     time.sleep(0.2)
                     if not el.control.HasKeyboardFocus:
                         raise RuntimeError("focus changed before Enter")
-                    pyautogui.press("enter")
+                    inputs.press("enter")
                     how = "typed (keys) + Enter"
                 else:
                     how = _type_control(el.control, body)

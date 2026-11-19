@@ -253,36 +253,36 @@ def decide_vision(cfg, goal: str, history: list[str]):
 
 # ---------------- execution ----------------
 def execute_vision(cfg, action: dict) -> str:
-    import pyautogui
+    from . import inputs
     k = action.get("action")
     xy = action.get("xy")
     if cfg.dry_run:
         return f"DRY-RUN would {k} {xy if xy else ''} {action.get('text','')}".strip()
     if k == "click" and xy:
-        pyautogui.click(*xy); return f"click {xy}"
+        inputs.click(*xy); return f"click {xy}"
     if k == "double" and xy:
-        pyautogui.doubleClick(*xy); return f"double {xy}"
+        inputs.doubleClick(*xy); return f"double {xy}"
     if k == "right" and xy:
-        pyautogui.rightClick(*xy); return f"right {xy}"
+        inputs.rightClick(*xy); return f"right {xy}"
     if k == "drag" and xy and action.get("xy2"):
-        pyautogui.moveTo(*xy); pyautogui.dragTo(*action["xy2"], duration=0.4)
+        inputs.moveTo(*xy); inputs.dragTo(*action["xy2"], duration=0.4)
         return f"drag {xy}->{action['xy2']}"
     if k == "type":
         txt = action.get("text", "")
         submit = txt.endswith("\n")
-        pyautogui.write(txt.rstrip("\n"), interval=0.02)
+        inputs.write(txt.rstrip("\n"), interval=0.02)
         if submit:
-            pyautogui.press("enter")
+            inputs.press("enter")
         return f"type {txt[:30]!r}{' + enter' if submit else ''}"
     if k == "scroll":
         if xy:
-            pyautogui.moveTo(*xy)
+            inputs.moveTo(*xy)
         amt = -500 if action.get("dir") in ("down", "right") else 500
-        pyautogui.scroll(amt); return f"scroll {action.get('dir')}"
+        inputs.scroll(amt); return f"scroll {action.get('dir')}"
     if k == "hotkey":
         parts = [p for p in action.get("keys", "").split() if p]
         if parts:
-            pyautogui.hotkey(*parts)
+            inputs.hotkey(*parts)
         return f"hotkey {action.get('keys')}"
     if k == "wait":
         time.sleep(5); return "wait 5s"

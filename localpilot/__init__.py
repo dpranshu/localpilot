@@ -7,4 +7,4 @@ from .config import Config, DEFAULT
 from .agent import run
 
 __all__ = ["Config", "DEFAULT", "run"]
-__version__ = "0.1.0"
+__version__ = "0.9.0"
