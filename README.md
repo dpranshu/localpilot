@@ -112,16 +112,17 @@ python run.py --model qwen2.5:3b-instruct --steps 20 --confirm "your goal"
 
 ## Single .exe (no Python needed to run)
 
-Build a one-file Windows executable of the desktop app:
+Build the desktop app as a **one-folder** bundle (recommended for selling: it keeps the LGPL
+`pystray` package replaceable, as its license requires -- see `THIRD_PARTY_NOTICES.md`):
 
 ```bash
 pip install pyinstaller
-python -m PyInstaller --onefile --noconsole --name LocalPilot --icon localpilot.ico \
+python -m PyInstaller --onedir --noconsole --name LocalPilot --icon localpilot.ico \
   --collect-submodules pystray --collect-submodules comtypes --collect-submodules uiautomation \
   --hidden-import PIL._tkinter_finder --hidden-import pystray._win32 localpilot_app.py
 ```
-The result is **`dist/LocalPilot.exe`** -- double-click to open the control panel; no Python
-install required on the target machine.
+The result is **`dist/LocalPilot/LocalPilot.exe`** (ship the whole `dist/LocalPilot` folder) --
+double-click to open the control panel; no Python install required on the target machine.
 
 > **Windows Smart App Control / App Control policies may block it.** The exe is *unsigned*, and
 > with Smart App Control in *Enforce* mode Windows refuses to run unsigned executables
@@ -243,7 +244,7 @@ click-through overlay (it never fights your mouse). Controls:
 - `--no-cursor` — hide it.
 - `--real-cursor` — for UIA actions, also **physically move + click the OS cursor** at the target
   (most visibly "the agent is doing it"); default off, since UIA `Invoke()` is more reliable.
-  The vision backend already drives the real cursor (pyautogui) by nature.
+  The vision backend already drives the real cursor by nature.
 - `cursor_move_time` (0.35s) — pause so you can see the cursor travel before it acts.
 
 Add `--screenshots` to also save `logs/run_<ts>_shots/step_NNN.png` for later review.
@@ -437,7 +438,12 @@ harness is the backstop if a web page tries to talk it into something.
 | `localpilot/perception.py` | UIA tree → numbered `Element` list (set-of-marks) |
 | `localpilot/llm.py` | Ollama client, forces single-JSON replies |
 | `localpilot/prompts.py` | System prompt + action schema |
-| `localpilot/actions.py` | Executes actions via UIA patterns / pyautogui |
+| `localpilot/actions.py` | Executes actions via UIA patterns / `inputs.py` |
+| `localpilot/inputs.py` | Keyboard and mouse via Windows SendInput (any language, emoji); replaces PyAutoGUI |
+| `localpilot/harness.py` | Permission gate before risky actions |
+| `localpilot/memory.py` | Task history + personal context |
+| `localpilot/settings.py` | Remembers panel settings |
+| `localpilot/health.py` | Startup check: AI engine installed / running / model present |
 | `localpilot/agent.py` | Perceive→think→act loop, kill-switch, logging |
 | `localpilot/config.py` | All tunables (model, caps, timings, safety) |
 | `run.py` | CLI entry point |
