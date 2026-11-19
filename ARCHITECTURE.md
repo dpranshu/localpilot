@@ -449,7 +449,7 @@ Legend — **Impact** H/M/L · **Effort** S (hours) / M (a day) / L (days) · **
 
 | ID | Idea | Impact | Effort |
 |---|---|:-:|:-:|
-| P2-1 | **Skill cache / macro learning:** save successful traces per goal, replay-and-adapt (a local answer to AGI-0's server memory) | H | L |
+| P2-1 | **Skill cache / macro learning:** save successful traces per goal, replay-and-adapt | H | L |
 | P2-2 | **Voice:** push-to-talk STT (local Whisper) + optional TTS | M | L |
 | P2-3 | **Run replay viewer** (HTML: screenshot + action per step) from the JSONL + `--screenshots` | M | M |
 | P2-4 | **Persist settings** (backend/model/toggles) in a config file | L | S |
@@ -480,7 +480,6 @@ C:\reserchagi
 ├─ requirements.txt        uiautomation, comtypes, requests, pyautogui, pillow, pystray
 ├─ README.md               user-facing docs
 ├─ ARCHITECTURE.md         this file
-├─ AGI-0_reverse_engineering.md   teardown of the commercial agent that started the project
 ├─ localpilot/
 │   ├─ agent.py            ★ the loop, hybrid switch, guards
 │   ├─ perception.py       UIA → numbered controls

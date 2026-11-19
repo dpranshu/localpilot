@@ -27,3 +27,6 @@ motion-preview*
 # reference artwork (not part of the app)
 halftone-sphere-*
 build.log
+
+# private research notes (not part of the product)
+AGI-0_reverse_engineering.md

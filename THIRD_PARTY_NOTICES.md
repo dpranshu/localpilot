@@ -34,9 +34,9 @@ loaded by the app (checked at runtime).
 | Component | License | Notes |
 |---|---|---|
 | Python 3.13 | PSF License | the interpreter (bundled only in the `.exe` build) |
-| Ollama | MIT | model server, installed by `install.py` |
+| Ollama | MIT | model server; installed on first run by the app (winget or the official installer), not bundled |
 | Qwen2.5-7B-Instruct (text model) | Apache-2.0 | verified from `ollama show --license` |
-| UI-TARS-1.5-7B (vision model, optional) | Apache-2.0 per its model card | the GGUF build used (`Mungert/UI-TARS-1.5-7B-GGUF`) does not embed a license; confirm on the model card before shipping |
+| UI-TARS-1.5-7B (vision model, optional) | Apache-2.0 | confirmed on the Hugging Face model cards of both `ByteDance-Seed/UI-TARS-1.5-7B` and the GGUF build used, `Mungert/UI-TARS-1.5-7B-GGUF` (checked 2026-11-19) |
 
 ## Build tools (not shipped as code)
 
