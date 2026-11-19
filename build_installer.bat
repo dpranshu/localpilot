@@ -1,7 +1,9 @@
 @echo off
 rem Builds dist\LocalPilot\ (one-folder app) and dist\LocalPilot-Setup-<ver>.exe
 cd /d "%~dp0"
-for /f %%v in ('python -c "import re;print(re.search(r'__version__ = \"(.+?)\"',open('localpilot/__init__.py').read()).group(1))"') do set VER=%%v
+for /f "tokens=2 delims==" %%v in ('findstr /b __version__ localpilot\__init__.py') do set VER=%%v
+set VER=%VER: =%
+set VER=%VER:"=%
 for /f %%p in ('python -c "import pystray,os;print(os.path.dirname(pystray.__file__))"') do set PYSTRAY=%%p
 python -m PyInstaller --noconfirm --onedir --noconsole --name LocalPilot --icon localpilot.ico ^
   --add-data "localpilot.ico;." --add-data "THIRD_PARTY_NOTICES.md;." --add-data "%PYSTRAY%;pystray" ^
