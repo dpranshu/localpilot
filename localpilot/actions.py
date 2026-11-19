@@ -100,6 +100,108 @@ def known_app(name: str) -> bool:
     return apps.find(low) is not None             # anything in the Start menu
 
 
+SETTINGS_PAGES = {
+    "display": "display", "screen": "display", "brightness": "display", "bluetooth": "bluetooth",
+    "devices": "bluetooth", "sound": "sound", "volume": "sound", "wifi": "network-wifi",
+    "wi-fi": "network-wifi", "network": "network", "internet": "network", "mouse": "mousetouchpad",
+    "touchpad": "devices-touchpad", "keyboard": "keyboard", "typing": "typing", "printers": "printers",
+    "battery": "batterysaver", "power": "powersleep", "storage": "storagesense", "apps": "appsfeatures",
+    "installed apps": "appsfeatures", "default apps": "defaultapps", "startup": "startupapps",
+    "notifications": "notifications", "personalization": "personalization",
+    "background": "personalization-background", "wallpaper": "personalization-background",
+    "themes": "themes", "colors": "colors", "lock screen": "lockscreen", "taskbar": "taskbar",
+    "date": "dateandtime", "time": "dateandtime", "date & time": "dateandtime", "language": "regionlanguage",
+    "region": "regionlanguage", "privacy": "privacy", "windows update": "windowsupdate",
+    "update": "windowsupdate", "accounts": "yourinfo", "about": "about", "night light": "nightlight",
+    "multitasking": "multitasking", "focus": "focus", "vpn": "network-vpn", "accessibility": "easeofaccess",
+}
+
+
+def settings_page_from_goal(goal: str) -> str | None:
+    """'Open Settings and go to the Display page' -> 'ms-settings:display'."""
+    import re
+    m = re.match(r"\s*(?:please\s+)?(?:open|go\s+to|show)\s+(?:the\s+)?(?:windows\s+)?settings\s*"
+                 r"(?:,|and|then)?\s*(?:and\s+)?(?:go\s+to|open|show)\s+(?:the\s+)?(.+?)"
+                 r"(?:\s+(?:page|settings|section|tab))?\s*[.!]?\s*$", goal or "", re.IGNORECASE)
+    if not m:
+        m = re.match(r"\s*(?:please\s+)?(?:open|show)\s+(?:the\s+)?(.+?)\s+settings\s*[.!]?\s*$",
+                     goal or "", re.IGNORECASE)
+    if not m:
+        return None
+    key = m.group(1).strip().lower()
+    return f"ms-settings:{SETTINGS_PAGES[key]}" if key in SETTINGS_PAGES else None
+
+
+def folder_from_goal(goal: str) -> str | None:
+    """'Open File Explorer and go to the Downloads folder' -> 'downloads' (known folders only)."""
+    import re
+    m = re.fullmatch(r"\s*(?:please\s+)?(?:open\s+(?:the\s+)?(?:file\s+explorer|explorer|files)\s*"
+                     r"(?:,|and|then)?\s*(?:and\s+)?(?:go\s+to|open|show)|open|go\s+to|show)\s+"
+                     r"(?:the\s+|my\s+)?(\w+)(?:\s+folder)?\s*[.!]?\s*", goal or "", re.IGNORECASE)
+    if not m or m.group(1).lower() not in _FOLDERS:
+        return None
+    return m.group(1).lower()
+
+
+def app_search_from_goal(goal: str):
+    """'Open File Explorer, go to Downloads and search for pdf' -> ('File Explorer', 'Downloads', 'pdf').
+    Only for apps (not websites / browsers); the app's OWN search box is used."""
+    import re
+    m = re.match(r"\s*(?:please\s+)?(?:open|launch|start)\s+(?:the\s+)?(?P<app>[\w .+&'-]+?)\s*"
+                 r"(?:,\s*|\s+and\s+|\s+then\s+)(?:(?:go\s+to|open)\s+(?:the\s+|my\s+)?(?P<folder>\w+)"
+                 r"(?:\s+folder)?\s*(?:,\s*|\s+and\s+|\s+then\s+))?search\s+(?:for\s+)?(?P<q>.+?)\s*[.!]?\s*$",
+                 goal or "", re.IGNORECASE)
+    if not m:
+        return None
+    app = m.group("app").strip()
+    if is_browser(app) or not known_app(app):
+        return None
+    folder = (m.group("folder") or "").strip()
+    if folder and folder.lower() not in _FOLDERS:
+        return None
+    return app, folder, m.group("q").strip(" \"'")
+
+
+def save_path_from_goal(goal: str) -> str | None:
+    """'... and save it as C:\\x\\note.txt' -> that path (only full paths)."""
+    import re
+    m = re.search(r"\bsave\s+(?:it|this|the\s+file|the\s+note)?\s*as\s+\"?([a-z]:\\[^\"]+?)\"?\s*[.!]?\s*$",
+                  goal or "", re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def save_as(path: str) -> ActionResult:
+    """Ctrl+S -> Save As dialog -> file name -> Enter. Never overwrites an existing file."""
+    import os
+    import uiautomation as _auto
+    if os.path.exists(path):
+        return ActionResult(False, f"{path} already exists -- not overwriting it")
+    inputs.hotkey("ctrl", "shift", "s")
+    dlg = None
+    for _ in range(30):
+        time.sleep(0.15)
+        fg = _auto.GetForegroundControl()
+        if fg and "save" in (fg.Name or "").lower():
+            dlg = fg
+            break
+    if dlg is None:
+        return ActionResult(False, "the Save As dialog did not open")
+    box = dlg.EditControl(AutomationId="1001")
+    if not box.Exists(2):
+        return ActionResult(False, "no File name box in the Save As dialog")
+    box.SetFocus()                       # the dialog ignores UIA SetValue: type the path
+    time.sleep(0.2)
+    inputs.hotkey("ctrl", "a")
+    inputs.write(path, interval=0.005)
+    time.sleep(0.3)
+    inputs.press("enter")
+    for _ in range(30):
+        time.sleep(0.15)
+        if os.path.exists(path):
+            return ActionResult(True, f"saved as {path}")
+    return ActionResult(False, f"file {path} did not appear after saving")
+
+
 def app_from_goal(goal: str) -> str | None:
     """'Open Calculator and ...' -> 'Calculator' (only for apps/folders we can open directly;
     never a Start-menu search, which types into whatever is in front)."""
@@ -320,6 +422,12 @@ def execute(cfg, action: dict, elements) -> ActionResult:
     if cfg.dry_run:
         return ActionResult(True, f"DRY-RUN would do: {action}")
 
+    if kind == "save_as":
+        path = str(action.get("path") or action.get("text") or "").strip()
+        if not path:
+            return ActionResult(False, "save_as missing 'path'")
+        return save_as(path)
+
     if kind == "open_app":
         name = str(action.get("name") or action.get("text") or "").strip()
         if not name:
@@ -339,8 +447,8 @@ def execute(cfg, action: dict, elements) -> ActionResult:
 
     if kind == "hotkey":
         keys = str(action.get("keys", "")).strip()
-        if not keys and "address" in str(say).lower():   # model said "focus address bar"
-            keys = "ctrl+l"
+        if not keys and any(w in str(say).lower() for w in ("address", "search bar", "url bar")):
+            keys = "ctrl+l"                                # model said "focus address bar"
         if not keys:
             return ActionResult(False, "hotkey missing 'keys'")
         try:

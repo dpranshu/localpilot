@@ -529,3 +529,22 @@ Settings › Bluetooth 24 → 14 s, Explorer › Downloads 21 → 9 s, open-only
 - **Focus pin:** after opening an app, LocalPilot works in the new window, never the one that was in front.
 
 Browser battery before → after: 0/9 with 4 false claims → 9/9 with 0 false claims, mostly 1–4 s per search.
+
+## Task skills (v0.9.3)
+
+A wider set of 15 everyday tasks went from 9/15 to 15/15. Each failure was traced to its root cause:
+
+| Skill | What it does |
+|---|---|
+| Settings pages | "Settings › Display / Sound / Wi-Fi …" opens `ms-settings:<page>` directly (about 40 pages) |
+| In-app search | "Open Settings / File Explorer (go to Downloads) and search for X" uses the app's own search box |
+| Folders | "Open Explorer and go to Downloads/Documents …" opens the folder itself |
+| Maths | percentages ("15 percent of 200"); exact answer check before the keyword guard |
+| Typing check | reads the editor, not the window title (the title shows one line, so the model retyped a list three times) |
+| Save as | `save_as` action plus auto-save when the goal says "save it as <path>"; types the path (the dialog ignores UIA SetValue) and never overwrites an existing file |
+| Search follow-ups | "...and play the first video" clicks YouTube's first `video-title` link; Wikipedia goes straight to the article (`go=Go`) |
+| Open a site | "Open youtube.com" opens it in the default browser |
+| Honest failure | an app that isn't installed stops at once with a plain message |
+| Focus | after the *model* opens an app, LocalPilot works in that app (it used to return to the previous window) |
+
+All three batteries together: 31/31 tasks with 0 false claims; most tasks take 1–9 s.

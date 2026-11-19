@@ -1,7 +1,7 @@
 ﻿; LocalPilot installer (Inno Setup 6).  Build: build_installer.bat
 #define AppName "LocalPilot"
 #ifndef AppVersion
-  #define AppVersion "0.9.2"
+  #define AppVersion "0.9.3"
 #endif
 
 [Setup]

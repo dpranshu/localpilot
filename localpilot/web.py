@@ -16,7 +16,7 @@ from urllib.parse import quote_plus
 SITES = {
     "youtube": ("https://www.youtube.com", "https://www.youtube.com/results?search_query={q}", "youtube"),
     "google": ("https://www.google.com", "https://www.google.com/search?q={q}", "google"),
-    "wikipedia": ("https://en.wikipedia.org", "https://en.wikipedia.org/w/index.php?search={q}", "wikipedia"),
+    "wikipedia": ("https://en.wikipedia.org", "https://en.wikipedia.org/w/index.php?search={q}&go=Go", "wikipedia"),
     "github": ("https://github.com", "https://github.com/search?q={q}&type=repositories", "github"),
     "amazon": ("https://www.amazon.com", "https://www.amazon.com/s?k={q}", "amazon"),
     "amazon.in": ("https://www.amazon.in", "https://www.amazon.in/s?k={q}", "amazon"),
@@ -119,6 +119,12 @@ def parse(goal: str) -> dict | None:
         # search (the web) for X / search X
         rf"^{_OPEN}search\s+(?:the\s+web\s+|the\s+internet\s+|online\s+|web\s+)?(?:for\s+)?(?P<q>.+?){_END}",
     ]
+    m = re.fullmatch(rf"(?:please\s+)?(?:open|go\s+to|visit|load)\s+(?:the\s+)?(?P<d>{_DOMAIN})\s*[.!]?", g, re.I)
+    if m:                       # "open youtube.com": just the site, in the user's browser
+        d = m.group("d")
+        url = d if d.lower().startswith("http") else "https://" + d
+        return {"browser": browser_in(goal), "query": None, "rest": "", "site": d, "url": url,
+                "home": url, "title_word": None}
     for p in pats:
         m = re.match(p, g, re.IGNORECASE)
         if not m:
@@ -153,6 +159,38 @@ def parse(goal: str) -> dict | None:
             info.update(site=None, url=eng.format(q=quote_plus(q)), home=None, title_word=None)
         return info
     return None
+
+
+# results-page link ids (Chromium exposes the HTML id as the UIA AutomationId)
+FIRST_RESULT_ID = {"youtube": "video-title"}
+_FIRST = re.compile(r"^(?:and\s+)?(?:play|open|click|watch|show|go\s+to)\s+(?:on\s+)?(?:the\s+)?"
+                    r"(?:(?:first|top|1st)\s*(?:one|video|result|song|link|article|page)?|"
+                    r"(?:article|page|video|wikipedia\s+article))\s*[.!]?$", re.I)
+
+
+def wants_first_result(rest: str) -> bool:
+    return bool(_FIRST.match((rest or "").strip()))
+
+
+def click_first_result(site: str, hwnd) -> bool:
+    """Click the first result link on a results page (real mouse click at its centre)."""
+    aid = FIRST_RESULT_ID.get(site or "")
+    if not aid:
+        return False
+    try:
+        import uiautomation as auto
+        from . import inputs
+        win = auto.ControlFromHandle(hwnd)
+        wr = win.BoundingRectangle
+        for c, _ in auto.WalkControl(win, maxDepth=60):
+            if c.ControlTypeName == "HyperlinkControl" and c.AutomationId == aid:
+                r = c.BoundingRectangle
+                if r.width() > 0 and r.height() > 0 and wr.top < r.top < wr.bottom:
+                    inputs.click((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+                    return True
+    except Exception:
+        return False
+    return False
 
 
 def query_in_title(query: str, title: str, need: float = 0.6) -> bool:

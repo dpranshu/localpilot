@@ -12,6 +12,7 @@ You MUST reply with a single JSON object and NOTHING else. Schema:
   {"action": "type_text", "text": "<text>", "say": "..."}   # type into the FOCUSED field (no id)
   {"action": "hotkey",    "keys": "<e.g. ctrl+l>", "say": "..."}
   {"action": "scroll",    "dir": "up"|"down", "say": "..."}
+  {"action": "save_as",   "path": "<full path, e.g. C:\\\\Users\\\\me\\\\note.txt>", "say": "..."}  # saves the open document
   {"action": "wait",      "say": "waiting for UI to load"}
   {"action": "done",      "say": "<what was accomplished or why stopping>"}
 
@@ -35,6 +36,8 @@ Rules:
     Edit/ComboBox named like "Search" (never the address bar), with \n at the end.
 - Before typing, look at the field: if it ALREADY shows your text (autocomplete or an earlier step),
   do not type it again -- press Enter (hotkey enter) or click the matching suggestion.
+- To SAVE a document to a file, use "save_as" with the full path from the GOAL (it handles the dialog).
+- A Document's value shows ALL its lines joined by " / ": if your text is already there, do not type it again.
 - If a step says the search results are ALREADY open, never search again: continue with the rest.
 - Do NOT use a separate "hotkey enter" after typing in a browser address bar -- append \n to the text
   instead, so typing and Enter happen together (a separate Enter step often fails there).

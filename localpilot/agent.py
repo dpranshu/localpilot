@@ -213,7 +213,16 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
         plan["browser"] = plan["browser"] or (auto_app if auto_app and actions.is_browser(auto_app)
                                               else web.default_browser())
         auto_app = plan["browser"] or "browser"
-    only_open = bool(auto_app) and not plan and actions.is_only_open(goal)
+    settings_uri = actions.settings_page_from_goal(goal) if notepad is None and not plan else None
+    app_search = actions.app_search_from_goal(goal) if notepad is None and not plan else None
+    save_path = actions.save_path_from_goal(goal)
+    folder = actions.folder_from_goal(goal) if notepad is None and not plan else None
+    if settings_uri:                      # "Settings > Display": open the page itself
+        auto_app = settings_uri
+    elif folder:                          # "Explorer > Downloads": open the folder itself
+        auto_app = folder
+    only_open = bool(auto_app) and not plan and (bool(settings_uri) or bool(folder)
+                                                 or actions.is_only_open(goal))
     if notepad is None and not only_open:
         llm.warm(cfg)                       # load the model into memory while we get ready
     if auto_app or notepad is not None:
@@ -307,8 +316,15 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                 if appeared:
                     work_hwnd, work_pid = _fg_now()      # work in the NEW browser window
                 q = plan["query"]
+                if q is None:                             # "open youtube.com": just the site
+                    if res.ok and _wait_title_has(_site_word(plan["url"]), cfg):
+                        final = f"done: opened {plan['url']}"
+                        logger.log({"event": "goal_check", "step": step, "done": True,
+                                    "why": "the site's name is in the browser title (web layer)"})
+                        overlay.done(final[:60]); time.sleep(0.6); break
+                    continue
                 if plan["url"]:
-                    found = res.ok and _wait_results(q, 12)
+                    found = res.ok and _wait_results(q, 20, work_hwnd if appeared else None)
                 else:
                     if appeared:
                         _wait_ui_ready(cfg)
@@ -318,6 +334,29 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                     logger.log({"event": "goal_check", "step": step, "done": True,
                                 "why": "the page title shows the search words (web layer)"})
                     overlay.done(final[:60]); time.sleep(0.6); break
+                if found and web.wants_first_result(plan["rest"]):
+                    hwnd = ctypes.windll.user32.GetForegroundWindow()
+                    t_now = _win_title(hwnd)
+                    if plan["site"] == "wikipedia" and not t_now.lower().startswith("search"):
+                        final = f"done: the Wikipedia article for '{q}' is open"
+                        logger.log({"event": "goal_check", "step": step, "done": True,
+                                    "why": "Wikipedia went straight to the article (web layer)"})
+                        overlay.done(final[:60]); time.sleep(0.6); break
+                    clicked, end_t = False, time.time() + 10   # results may still be loading
+                    while plan["site"] in web.FIRST_RESULT_ID and not clicked and time.time() < end_t:
+                        clicked = web.click_first_result(plan["site"], hwnd)
+                        if not clicked:
+                            time.sleep(0.5)
+                    if clicked:
+                        logger.log({"event": "action", "step": step, "mode": "uia",
+                                    "action": {"action": "click", "say": "first result (web layer)"},
+                                    "result": "[OK] clicked the first result"})
+                        if _wait_title(lambda t: not web.query_in_title(q, t) or "watch" in
+                                       web.page_url(hwnd), 10) and "/results" not in web.page_url(hwnd):
+                            final = f"done: opened the first result for '{q}'"
+                            logger.log({"event": "goal_check", "step": step, "done": True,
+                                        "why": "left the results page for the first result"})
+                            overlay.done(final[:60]); time.sleep(0.6); break
                 if found:
                     history.append(f"step {step}: the search results for '{q}' are ALREADY open "
                                    f"on screen. Do not search again. Now: {plan['rest']}")
@@ -330,8 +369,19 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
             if auto_app and step == 1 and not cfg.dry_run:
                 windows_before, just_opened = _top_windows(), auto_app
                 url = actions.url_from_goal(goal) if actions.is_browser(auto_app) else None
-                res = (actions.launch_browser_at(auto_app, url) if url
-                       else actions._launch_app(auto_app))
+                if url:
+                    res = actions.launch_browser_at(auto_app, url)
+                elif app_search and app_search[1]:       # "Explorer, go to Downloads and search"
+                    res = actions._launch_app(app_search[1])
+                else:
+                    res = actions._launch_app(auto_app)
+                if not res.ok and not acted:
+                    # e.g. Paint isn't on this PC: say so plainly instead of guessing around
+                    final = UnfinishedRun(f"stopped: could not open {auto_app} -- it does not seem "
+                                          f"to be installed on this PC ({res.detail[:80]})")
+                    logger.log({"event": "action", "step": step, "result": str(res), "mode": "uia",
+                                "action": {"action": "open_app", "name": auto_app, "say": "auto"}})
+                    overlay.stopped(final); break
                 logger.log({"event": "action", "step": step, "result": str(res), "mode": "uia",
                             "action": {"action": "open_app", "name": auto_app, "say": "auto"}})
                 history.append(f"step {step}: open_app {auto_app} -> {res}")
@@ -357,6 +407,17 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                     time.sleep(cfg.settle_seconds)
                     continue
                 _wait_ui_ready(cfg)          # don't let the model look at a half-loaded window
+                if app_search:
+                    # In-app search (Settings, File Explorer, Store ...): the app's OWN search box.
+                    q = app_search[2]
+                    if _app_search(q, logger, step, cfg):
+                        final = f"done: searched {auto_app} for '{q}'"
+                        logger.log({"event": "goal_check", "step": step, "done": True,
+                                    "why": "the search words are in the app's search box/results"})
+                        overlay.done(final[:60]); time.sleep(0.6); break
+                    history.append(f"step {step}: could not find {auto_app}'s search box "
+                                   f"automatically; find it and search for '{q}'.")
+                    continue
                 expr = llm.math_expression(goal) if "calc" in auto_app.lower() else None
                 if expr:
                     # Calculator maths: clear, type the expression, read the answer. No model.
@@ -393,6 +454,24 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                 time.sleep(cfg.settle_seconds)
                 continue
             drift = 0
+
+            # Typing goals: read the editor itself (the title shows only the first line, and
+            # the model once retyped a list three times because of that). Then save if asked.
+            if acted and not cfg.dry_run and llm.typed_goal_met(goal, elements):
+                if save_path and not os.path.exists(save_path):
+                    res = actions.save_as(save_path)
+                    logger.log({"event": "action", "step": step, "mode": "uia", "result": str(res),
+                                "action": {"action": "save_as", "path": save_path, "say": "auto"}})
+                    history.append(f"step {step}: save_as {save_path} -> {res}")
+                    if not res.ok:
+                        final = UnfinishedRun(f"stopped: typed the text but could not save: {res.detail}")
+                        overlay.stopped(final); break
+                if not save_path or os.path.exists(save_path):
+                    final = "done: the text is in the document" + (f" and saved as {save_path}"
+                                                                   if save_path else "")
+                    logger.log({"event": "goal_check", "step": step, "done": True,
+                                "why": "every requested item is in the editor (read directly)"})
+                    overlay.done(final[:60]); time.sleep(0.6); break
 
             # Goal check: after one of OUR actions changed the screen, ask whether the goal
             # is already met -- stops the agent from flailing after it has succeeded.
@@ -570,11 +649,19 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                 last_kind = akind
                 if cfg.backend == "hybrid":
                     text_stall = 0 if result.ok and _text_is_progress(action, rect) else text_stall + 1
-                if result.ok and akind not in ("wait", "done"):
+                if result.ok and akind == "open_app" and not cfg.dry_run and \
+                        _wait_for_app(just_opened, windows_before, cfg, timeout=8):
+                    # the model opened an app: work THERE from now on, never in the window
+                    # that was in front before (typing went back there once)
+                    work_hwnd, work_pid = _fg_now()
+                    _wait_ui_ready(cfg)
+                elif result.ok and akind not in ("wait", "done"):
                     work_hwnd, work_pid = fg_hwnd, fg_pid
                 if result.done:
                     missing = (llm.goal_missing_terms(goal, title, rendered)
                                if cfg.verify_goal and not cfg.dry_run else [])
+                    if save_path and not cfg.dry_run and not os.path.exists(save_path):
+                        missing = missing or [f"the saved file {save_path} (use save_as)"]
                     if plan and not plan["rest"] and not cfg.dry_run and \
                             not web.results_open(
                             plan["query"], title, ctypes.windll.user32.GetForegroundWindow()):
@@ -667,11 +754,12 @@ def _wait_title(pred, timeout: float = 10.0) -> bool:
     return False
 
 
-def _wait_results(query: str, timeout: float = 10.0) -> bool:
-    """Wait until the front window shows results for query (title, or URL every ~1 s)."""
-    end, n = time.time() + timeout, 0
+def _wait_results(query: str, timeout: float = 10.0, hwnd=None) -> bool:
+    """Wait until the window (the one we opened, else the front one) shows results for
+    query: in its title, or in its URL (checked about once a second)."""
+    end, n, fixed = time.time() + timeout, 0, hwnd
     while time.time() < end:
-        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        hwnd = fixed or ctypes.windll.user32.GetForegroundWindow()
         title = _win_title(hwnd)
         if web.query_in_title(query, title):
             return True
@@ -680,6 +768,39 @@ def _wait_results(query: str, timeout: float = 10.0) -> bool:
             return True
         time.sleep(0.15)
     return False
+
+
+def _app_search(query: str, logger, step, cfg) -> bool:
+    """Search inside a desktop app with its OWN search box: select all, type once, Enter once."""
+    try:
+        import uiautomation as auto
+        win = auto.ControlFromHandle(ctypes.windll.user32.GetForegroundWindow())
+        box = web.find_search_box(win)
+        if box is None:
+            logger.log({"event": "app_search", "step": step, "found_box": False})
+            return False
+        try:
+            box.Click(simulateMove=False)
+        except Exception:
+            box.SetFocus()
+        time.sleep(0.2)
+        actions.inputs.hotkey("ctrl", "a")
+        actions.inputs.write(query, interval=0.02)
+        time.sleep(0.4)
+        actions.inputs.press("enter")
+        logger.log({"event": "app_search", "step": step, "found_box": True,
+                    "box": (box.Name or box.AutomationId)[:40]})
+        q = query.lower()
+        end = time.time() + 6
+        while time.time() < end:                    # results: title, or the page now lists them
+            time.sleep(0.5)
+            t, els, rendered = perceive(cfg)
+            if q in t.lower() or q in rendered.lower().replace(f'value="{q}"', ""):
+                return True
+        return False
+    except Exception as e:
+        logger.log({"event": "app_search", "step": step, "error": str(e)[:120]})
+        return False
 
 
 def _site_search(query: str, logger, step) -> bool:

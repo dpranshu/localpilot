@@ -110,9 +110,15 @@ _OPS = {"times": "*", "x": "*", "*": "*", "multiplied by": "*", "plus": "+", "+"
         "minus": "-", "-": "-", "divided by": "/", "/": "/"}
 
 
+_PCT = r"(\d+(?:\.\d+)?)\s*(?:%|percent|per cent)\s+of\s+(\d+(?:\.\d+)?)"
+
+
 def math_expression(goal: str) -> str | None:
     """'calculate 25 times 4' -> '25*4' (keys Calculator understands); else None."""
     import re as _re
+    p = _re.search(_PCT, (goal or "").lower())
+    if p:                                            # '15 percent of 200' -> '200*15/100'
+        return f"{p.group(2)}*{p.group(1)}/100"
     m = _re.search(r"(-?\d+(?:\.\d+)?)\s*(times|x|\*|multiplied by|plus|\+|minus|-|divided by|/)\s*"
                    r"(-?\d+(?:\.\d+)?)", (goal or "").lower())
     return f"{m.group(1)}{_OPS[m.group(2)]}{m.group(3)}" if m else None
@@ -121,6 +127,10 @@ def math_expression(goal: str) -> str | None:
 def math_answer(goal: str) -> str | None:
     """'calculate 25 times 4' -> '100'. Only simple 'A op B' goals; else None."""
     import re as _re
+    p = _re.search(_PCT, (goal or "").lower())
+    if p:
+        v = float(p.group(1)) * float(p.group(2)) / 100
+        return str(int(v)) if v == int(v) else str(round(v, 6)).rstrip("0").rstrip(".")
     m = _re.search(r"(-?\d+(?:\.\d+)?)\s*(times|x|\*|multiplied by|plus|\+|minus|-|divided by|/)\s*"
                    r"(-?\d+(?:\.\d+)?)", goal.lower())
     if not m:
@@ -134,12 +144,41 @@ def math_answer(goal: str) -> str | None:
     return str(int(v)) if v == int(v) else str(round(v, 6)).rstrip("0").rstrip(".")
 
 
+def typed_items(goal: str) -> list[str]:
+    """'type a shopping list: milk, eggs, bread' -> ['milk', 'eggs', 'bread'];
+    'type hello world, and save it as X' -> ['hello world']. [] if the goal is not a typing goal."""
+    import re as _re
+    m = _re.search(r"\b(?:type|write|enter)\b(?:[^:]{0,40}:)?\s*(.+?)"
+                   r"(?:,?\s+(?:and|then)\s+(?:save|press|close|send)\b.*)?\s*[.!]?\s*$",
+                   goal or "", _re.IGNORECASE)
+    if not m:
+        return []
+    body = m.group(1).strip().strip("\"'")
+    if ":" in (goal or "") and "," in body:
+        parts = [p.strip() for p in _re.split(r",|\band\b", body)]
+    else:
+        parts = [body]
+    return [p.lower() for p in parts if p]
+
+
+def typed_goal_met(goal: str, elements) -> bool:
+    """True when every requested item is in an editor on screen (reads the editor itself,
+    not the window title, which only shows the first line)."""
+    items = typed_items(goal)
+    if not items:
+        return False
+    text = " ".join((getattr(e, "value", "") or "") for e in elements
+                    if getattr(e, "role", "") in ("Document", "Edit")).lower()
+    text = " ".join(text.split())
+    return bool(text) and all(" ".join(i.split()) in text for i in items)
+
+
 def check_goal(cfg, goal: str, title: str, rendered_elements: str) -> tuple[bool, str]:
     """Ask the model if the goal is already met on this screen. Never raises.
     The model's yes only counts if the goal's own words are actually on screen."""
-    if not goal_terms_on_screen(goal, title, rendered_elements):
-        return False, "goal keywords not on screen"
     expected = math_answer(goal)                   # exact, instead of asking a 7B to do math
+    if expected is None and not goal_terms_on_screen(goal, title, rendered_elements):
+        return False, "goal keywords not on screen"
     if expected is not None:
         import re as _re
         shown = {n.replace(",", "") for n in _re.findall(r"-?\d[\d,]*(?:\.\d+)?", f"{title} {rendered_elements}")}

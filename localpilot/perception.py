@@ -40,7 +40,9 @@ class Element:
         if self.name:
             parts.append(f'"{self.name[:80]}"')
         if self.value:
-            parts.append(f'value="{self.value[:60]}"')
+            v = " / ".join(x for x in self.value.replace("\r", "\n").split("\n") if x.strip())
+            limit = 240 if self.role in ("Document", "Edit") else 60
+            parts.append(f'value="{v[:limit]}{"..." if len(v) > limit else ""}"')
         if not self.enabled:
             parts.append("(disabled)")
         return " ".join(parts)
