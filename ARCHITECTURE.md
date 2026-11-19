@@ -504,7 +504,7 @@ Each layer of the loop (command → harness → action model → executor → ob
 
 | Layer | Fast path | Effect |
 |---|---|---|
-| Harness | `apps.py` indexes every Start-menu app (`Get-StartApps`, cached in `%APPDATA%\LocalPilotpps.json`) and launches it via `shell:AppsFolder`. "Open X" goals finish **without the model** once X's window is in front. "Open <browser> and go to <url>" starts the browser directly at the URL. | open any app: about 1 s |
+| Harness | `apps.py` indexes every Start-menu app (`Get-StartApps`, cached in `%APPDATA%\LocalPilot\apps.json`) and launches it via `shell:AppsFolder`. "Open X" goals finish **without the model** once X's window is in front. "Open <browser> and go to <url>" starts the browser directly at the URL. | open any app: about 1 s |
 | Action model | `127.0.0.1` instead of `localhost` (Windows IPv6 lookup cost **about 2 s per call**); `keep_alive=30m`; warm-up when the panel opens and while a run starts; `num_predict` cap | about 4 s saved per step |
 | Executor | a URL typed into a browser always goes to the address bar (Ctrl+L first) | no typing into pages |
 | Observer | `_settle` returns as soon as the UI changes and holds still (capped by `settle_seconds`); `_wait_ui_ready` waits for a launched app's controls to stop appearing | no fixed sleeps; no acting on half-loaded windows |
