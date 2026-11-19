@@ -212,6 +212,7 @@ class FixTests(unittest.TestCase):
                 m(agent, "Logger"); m(agent, "_key_down", return_value=False)
                 m(agent.time, "sleep"); m(agent, "_drive_cursor")
                 m(agent, "perceive", side_effect=lambda cfg: (next(titles), [], ""))
+                m(agent.web, "parse", return_value=None)   # model path only; never open a browser
                 m(agent.llm, "ping", return_value=(True, "OK"))
                 m(agent.llm, "decide", return_value={"action": "hotkey", "keys": "enter"})
                 chk = m(agent.llm, "check_goal", return_value=(met, "results are shown"))
@@ -267,6 +268,7 @@ class DoneAndFocusTests(unittest.TestCase):
             m(agent.time, "sleep"); m(agent, "_drive_cursor")
             m(agent, "_fg_window", return_value=(1, 100))
             m(agent, "perceive", return_value=("Save As", [], "[1] Button \"Save\""))
+            m(agent.web, "parse", return_value=None)       # model path only; never open a browser
             m(agent.llm, "ping", return_value=(True, "OK"))
             decide = m(agent.llm, "decide", return_value={"action": "done", "say": "searched"})
             m(agent.actions, "execute", return_value=ActionResult(True, "done: searched", done=True))
