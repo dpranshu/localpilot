@@ -433,6 +433,12 @@ class App:
             self.logq.put({"event": "_" + kind, **data})
         elif kind == "busy":
             self.logq.put({"event": "_busy", "busy": data.get("busy")})
+        elif kind == "paused":
+            self.logq.put({"event": "_note", "text": "(paused) say or type 'continue' to go on, "
+                                                     "or 'stop' to cancel"})
+            self.logq.put({"event": "_setup", "message": "Paused - say or type 'continue', or 'stop'."})
+        elif kind == "resumed":
+            self.logq.put({"event": "_setup", "message": "Continuing…"})
 
     def _voice_changed(self):
         self.cfg.tts_voice = self._voice_names.get(self.voice_pick.get(), "af_heart")
@@ -461,13 +467,40 @@ class App:
             self.voice.whisper_model = self.cfg.whisper_model
         return True
 
+    def _preload_speech(self, visible: bool = False):
+        """Get Whisper ready in the background so the first spoken command isn't slow.
+        At startup: only if it's already downloaded (quiet). On first voice use: download if
+        needed, with progress in the status bar."""
+        try:
+            from . import voice as _v
+            t = _v.get_transcriber(self.cfg.whisper_model)
+        except Exception as e:
+            if visible:
+                self.logq.put({"event": "_setup", "message": f"Voice unavailable: {e}"})
+            return
+        if t.state in ("ready", "downloading", "loading"):
+            return
+        if not visible and not t.is_cached():
+            return                                   # never download unasked at startup
+        report = (lambda m: self.logq.put({"event": "_setup", "message": m})) if visible else                  (lambda m: self.logq.put({"event": "_note", "text": f"(voice) {m}"}) if "ready" in m else None)
+        t.preload(report)
+
+    def _speech_ready_note(self) -> str:
+        from . import voice as _v
+        t = _v.get_transcriber(self.cfg.whisper_model)
+        if t.state == "ready":
+            return ""
+        self._preload_speech(visible=True)
+        return " (getting speech recognition ready - talk anyway, I'll catch up)"
+
     def on_mic(self):
         """Push to talk: listen for one request (Silero VAD + Whisper, all local)."""
         self._ensure_voice()
         if self.voice.listener is not None and self.voice.mode == "push":
             self.voice.stop_listening(); self.set_status("Stopped listening.", "info"); return
         err = self.voice.start_listening("push")
-        self.set_status(err or "Listening… speak now (I'll stop when you pause).", "err" if err else "run")
+        self.set_status(err or "Listening… speak now (I'll stop when you pause)." + self._speech_ready_note(),
+                        "err" if err else "run")
 
     def _sync_handsfree(self):
         on = self.v_handsfree.get()
@@ -476,7 +509,8 @@ class App:
             if self.voice.mode != "hands-free":
                 self.voice.stop_listening()
                 err = self.voice.start_listening("hands-free")
-                self.set_status(err or "Hands-free: I'm listening. Say \"stop\" anytime.",
+                self.set_status(err or "Hands-free: I'm listening. Say \"stop\" anytime."
+                                + self._speech_ready_note(),
                                 "err" if err else "ok")
                 if err:
                     self.v_handsfree.set(False)
@@ -504,6 +538,7 @@ class App:
             from . import llm, apps
             llm.warm(self.cfg)
             threading.Thread(target=apps.all_apps, daemon=True).start()
+            threading.Thread(target=self._preload_speech, daemon=True).start()
         if state != "ok":
             self.append(f"[setup] {msg}")
         label = {"not_running": "Start AI engine", "not_installed": "Install AI engine",

@@ -262,17 +262,91 @@ class StreamingVAD:
 
 
 # ============================== speech in ==============================
+_EXPECTED_MB = {"tiny.en": 75, "base.en": 148, "small.en": 484}
+
+
 class Transcriber:
+    """Whisper speech-to-text. preload() gets it ready in the background (downloading it once
+    with visible progress if needed), so the first spoken command isn't slow. Transcribing
+    before it's ready just waits for it -- the user can start talking straight away."""
+
     def __init__(self, model: str = "base.en"):
         self.model_name = model
         self._m = None
+        self._lock = threading.Lock()
+        self.state = "idle"            # idle | downloading | loading | ready | error
+        self.progress = 0              # 0-100 while downloading
+        self.error = ""
 
-    def _load(self):
-        if self._m is None:
-            from faster_whisper import WhisperModel
-            self._m = WhisperModel(self.model_name, device="cpu", compute_type="int8",
-                                   download_root=os.path.join(MODELS, "whisper"))
-        return self._m
+    @property
+    def root(self) -> str:
+        return os.path.join(MODELS, "whisper")
+
+    def _repo_dir(self) -> str:
+        return os.path.join(self.root, "models--Systran--faster-whisper-" + self.model_name)
+
+    def is_cached(self) -> bool:
+        snap = os.path.join(self._repo_dir(), "snapshots")
+        if not os.path.isdir(snap):
+            return False
+        return any(os.path.exists(os.path.join(snap, d, "model.bin")) for d in os.listdir(snap))
+
+    def _downloaded_mb(self) -> float:
+        total = 0
+        for dp, _, fn in os.walk(self._repo_dir()):
+            for f in fn:
+                try:
+                    total += os.path.getsize(os.path.join(dp, f))
+                except OSError:
+                    pass
+        return total / 2**20
+
+    def _load(self, progress=lambda msg: None):
+        with self._lock:                                  # one loader; others wait for it
+            if self._m is not None:
+                return self._m
+            try:
+                from faster_whisper import WhisperModel
+                path = self.model_name
+                if not self.is_cached():
+                    self.state = "downloading"
+                    from faster_whisper.utils import download_model
+                    done = threading.Event()
+                    want = _EXPECTED_MB.get(self.model_name, 150)
+
+                    def watch():
+                        while not done.wait(0.5):
+                            self.progress = min(99, int(self._downloaded_mb() * 100 / want))
+                            progress(f"Downloading speech recognition (one time)... {self.progress}%")
+                    threading.Thread(target=watch, daemon=True).start()
+                    try:
+                        path = download_model(self.model_name, cache_dir=self.root)
+                    finally:
+                        done.set()
+                    self.progress = 100
+                self.state = "loading"
+                progress("Loading speech recognition...")
+                self._m = WhisperModel(path, device="cpu", compute_type="int8", download_root=self.root)
+                self.state = "ready"
+                progress("Speech recognition ready.")
+            except Exception as e:
+                self.state, self.error = "error", str(e)[:200]
+                progress(f"Speech recognition could not start: {self.error}")
+                raise
+            return self._m
+
+    def preload(self, progress=lambda msg: None) -> threading.Thread:
+        """Get ready in the background. Safe to call more than once."""
+        t = threading.Thread(target=lambda: self._try_load(progress), daemon=True)
+        t.start()
+        return t
+
+    def _try_load(self, progress):
+        try:
+            self._load(progress)
+        except Exception:
+            pass
+
 
     def __call__(self, audio16k: np.ndarray, hotwords: str = "") -> str:
         segs, _ = self._load().transcribe(audio16k.astype(np.float32), language="en", beam_size=1,
@@ -284,6 +358,17 @@ class Transcriber:
         if text.lower().strip(" .!") in ("", "you", "thank you", "thanks for watching", "bye"):
             return ""
         return text
+
+
+_TRANSCRIBERS: dict = {}
+
+
+def get_transcriber(model: str = "base.en") -> Transcriber:
+    """One shared engine per model: preloading and listening use the same instance."""
+    if model not in _TRANSCRIBERS:
+        _TRANSCRIBERS[model] = Transcriber(model)
+    return _TRANSCRIBERS[model]
+
 
 
 _FIX = [(r"\b(?:u|you)\s*tube\b", "YouTube"), (r"\bvs\s*code\b", "VS Code"),
@@ -303,7 +388,7 @@ class Listener:
     def __init__(self, on_utterance, on_speech_start=lambda: None, transcriber: Transcriber | None = None,
                  hotwords=lambda: ""):
         self.vad = StreamingVAD()
-        self.stt = transcriber or Transcriber()
+        self.stt = transcriber or get_transcriber()
         self.on_utterance = on_utterance
         self.on_speech_start = on_speech_start
         self.hotwords = hotwords
@@ -444,9 +529,9 @@ class Voice:
 
     def _heard(self, text: str, error: str = ""):
         if error or not text:
-            release = getattr(self.session, "release", None)
-            if release:
-                release()                         # nothing usable was said: carry on
+            unheard = getattr(self.session, "unheard", None)
+            if unheard:
+                unheard()                         # stay paused; never resume on unclear audio
             if error:
                 self.log(f"(voice: could not transcribe: {error})")
             return
@@ -467,7 +552,7 @@ class Voice:
             return ""
         try:
             self.listener = Listener(self._heard, self._speech_started, hotwords=self._hotwords,
-                                     transcriber=Transcriber(getattr(self, "whisper_model", "base.en")))
+                                     transcriber=get_transcriber(getattr(self, "whisper_model", "base.en")))
             self.listener.start()
             self.mode = mode
             return ""

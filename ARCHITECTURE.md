@@ -610,3 +610,25 @@ keyboard ───────────────────────�
 Voice battery (recorded speech in place of the mic; everything after it is real): voice command → act →
 verify → speak; "what's happening on my computer"; interruption mid-plan (later steps never ran);
 typed and spoken turns sharing one session: 4/4.
+
+## Interruption safety and Whisper preload (v1.1.1)
+
+**Rule: a paused or stopped task never resumes without your explicit permission.**
+
+| Event while a task runs | Result |
+|---|---|
+| you start speaking (voice detected) | task **paused** before its next action, and LocalPilot stops talking |
+| "stop" / "cancel" / "wait, don't change that file" | task **cancelled**; nothing else is done; a later "continue" gets "nothing paused" |
+| "continue" / "resume" / "go on" / "carry on" | task resumes; the only way to resume |
+| anything else, noise, or an unclear transcript | **stays paused**: "I've paused: … Say continue to carry on, or stop to cancel it." |
+
+- No pause timeout anywhere (the old 10-second auto-resume is gone). F12 still aborts while paused.
+- `agent._gate()` runs before every fast-path click, keystroke or launch: web search, first-result click,
+  in-app search, Calculator, save-as, address-bar and Esc keys. The fast-path helpers re-raise a stop
+  instead of swallowing it.
+- **Whisper preload:** one shared engine (`voice.get_transcriber`). When the panel opens it loads in the background
+  if the model is already downloaded (about 1.5 s), and the first command then transcribes in about 0.65 s. If the model
+  is missing, it downloads on first voice use, never at startup, with live progress in the status bar. Speech heard
+  before it is ready waits and is then transcribed.
+
+Regression: 148 unit tests, voice scenarios A–F 6/6, text tasks 41/41 with 0 false claims.

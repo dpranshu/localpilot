@@ -55,11 +55,12 @@ class _RunStopped(Exception):
 
 def _check_stop(cfg):
     hold = getattr(cfg, "hold_event", None)
-    if hold is not None and hold.is_set():
-        # the user started talking: don't act until we know what they said (max 10 s)
-        end = time.time() + 10
-        while hold.is_set() and time.time() < end and not cfg.stop_event.is_set():
-            time.sleep(0.05)
+    # Paused (the user spoke): wait -- with NO timeout -- until they explicitly say continue
+    # (hold cleared) or stop. A paused task never resumes on its own.
+    while hold is not None and hold.is_set() and not cfg.stop_event.is_set():
+        if _key_down(cfg.kill_key_vk):
+            raise _RunStopped("aborted by user (F12)")
+        time.sleep(0.05)
     if cfg.stop_event.is_set():
         raise _RunStopped("stopped by user")
     if _key_down(cfg.kill_key_vk):
@@ -179,8 +180,8 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
 
     if cfg.stop_event is None:
         cfg = replace(cfg, stop_event=Event())
-    global _STOP
-    _STOP = cfg.stop_event
+    global _STOP, _CFG
+    _STOP, _CFG = cfg.stop_event, cfg
 
     if cfg.backend == "vision":
         from .vision import run_vision
@@ -308,6 +309,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
             if plan and step == 1 and not cfg.dry_run:
                 windows_before, just_opened = _top_windows(), plan["browser"] or ""
                 target = plan["url"] or plan["home"]
+                _gate()
                 if plan["browser"]:
                     res = actions.launch_browser_at(plan["browser"], target)
                 else:
@@ -336,6 +338,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                 else:
                     if appeared:
                         _wait_ui_ready(cfg)
+                    _gate()
                     found = appeared and _site_search(q, logger, step)
                 if found and not plan["rest"]:
                     final = f"done: search results for '{q}' are open"
@@ -352,6 +355,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                         overlay.done(final[:60]); time.sleep(0.6); break
                     clicked, end_t = False, time.time() + 10   # results may still be loading
                     while plan["site"] in web.FIRST_RESULT_ID and not clicked and time.time() < end_t:
+                        _gate()
                         clicked = web.click_first_result(plan["site"], hwnd)
                         if not clicked:
                             time.sleep(0.5)
@@ -377,6 +381,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
             if auto_app and step == 1 and not cfg.dry_run:
                 windows_before, just_opened = _top_windows(), auto_app
                 url = actions.url_from_goal(goal) if actions.is_browser(auto_app) else None
+                _gate()
                 if url:
                     res = actions.launch_browser_at(auto_app, url)
                 elif app_search and app_search[1]:       # "Explorer, go to Downloads and search"
@@ -418,6 +423,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                 if app_search:
                     # In-app search (Settings, File Explorer, Store ...): the app's OWN search box.
                     q = app_search[2]
+                    _gate()
                     if _app_search(q, logger, step, cfg, app_search[0]):
                         final = f"done: searched {auto_app} for '{q}'"
                         logger.log({"event": "goal_check", "step": step, "done": True,
@@ -429,6 +435,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                 expr = llm.math_expression(goal) if "calc" in auto_app.lower() else None
                 if expr:
                     # Calculator maths: clear, type the expression, read the answer. No model.
+                    _gate()
                     actions.inputs.press("esc")
                     actions.inputs.write(expr + "=", interval=0.02)
                     history.append(f"step {step}: typed {expr}= into Calculator (auto)")
@@ -467,6 +474,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
             # the model once retyped a list three times because of that). Then save if asked.
             if acted and not cfg.dry_run and llm.typed_goal_met(goal, elements):
                 if save_path and not os.path.exists(save_path):
+                    _gate()
                     res = actions.save_as(save_path)
                     logger.log({"event": "action", "step": step, "mode": "uia", "result": str(res),
                                 "action": {"action": "save_as", "path": save_path, "say": "auto"}})
@@ -592,6 +600,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                     action["text"] = t + "\n"          # a URL is always meant to be opened
                 if looks_url and akind in ("type", "type_text") and not addr_armed                         and _BROWSER_TITLE.search(title or "") and not cfg.dry_run:
                     try:                              # never type a URL into the page itself
+                        _gate()
                         actions.inputs.hotkey("ctrl", "l"); time.sleep(0.15)
                         action = {"action": "type_text", "text": action["text"],
                                   "say": action.get("say", "")}
@@ -599,6 +608,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                         pass
                 if akind in ("type", "type_text") and "=" in t and                         (title or "").strip().lower() == "calculator" and not cfg.dry_run:
                     try:                              # start the sum fresh: no leftover digits
+                        _gate()
                         actions.inputs.press("esc"); time.sleep(0.05)
                     except Exception:
                         pass
@@ -721,6 +731,13 @@ def _site_word(url: str) -> str:
 
 
 _STOP = None          # the running task's stop event: every wait below bails out on it
+_CFG = None           # the running task's config, for _gate()
+
+
+def _gate():
+    """Call right before ANY click/keystroke/launch: waits while paused, raises if stopped."""
+    if _CFG is not None:
+        _check_stop(_CFG)
 
 
 def _stopping() -> bool:
@@ -822,6 +839,7 @@ def _app_search(query: str, logger, step, cfg, app: str = "") -> bool:
         except Exception:
             box.SetFocus()
         time.sleep(0.2)
+        _gate()                                       # paused/stopped: never type
         actions.inputs.hotkey("ctrl", "a")
         actions.inputs.write(query, interval=0.02)
         time.sleep(0.4)
@@ -836,6 +854,8 @@ def _app_search(query: str, logger, step, cfg, app: str = "") -> bool:
             if q in t.lower() or q in rendered.lower().replace(f'value="{q}"', ""):
                 return True
         return False
+    except _RunStopped:
+        raise
     except Exception as e:
         logger.log({"event": "app_search", "step": step, "error": str(e)[:120]})
         return False
@@ -855,6 +875,7 @@ def _site_search(query: str, logger, step) -> bool:
         except Exception:
             box.SetFocus()
         time.sleep(0.15)
+        _gate()                                       # paused/stopped: never type
         actions.inputs.hotkey("ctrl", "a")              # replace, never append
         actions.inputs.write(query, interval=0.02)
         time.sleep(0.25)
@@ -862,6 +883,8 @@ def _site_search(query: str, logger, step) -> bool:
         logger.log({"event": "site_search", "step": step, "found_box": True,
                     "box": (box.Name or box.AutomationId)[:40]})
         return _wait_results(query, 10)
+    except _RunStopped:
+        raise
     except Exception as e:
         logger.log({"event": "site_search", "step": step, "error": str(e)[:120]})
         return False

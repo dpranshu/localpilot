@@ -36,10 +36,9 @@ def handle(text: str, cfg, on_event=lambda kind, data: None, preferences: str = 
     n = len(plan["steps"])
     for i, step in enumerate(plan["steps"], 1):
         hold = getattr(cfg, "hold_event", None)
-        if hold is not None and hold.is_set():           # the user is talking: wait for it
+        if hold is not None and hold.is_set():           # paused: wait for continue / stop
             import time as _t
-            end = _t.time() + 10
-            while hold.is_set() and _t.time() < end and not cfg.stop_event.is_set():
+            while hold.is_set() and not cfg.stop_event.is_set():   # no timeout, ever
                 _t.sleep(0.05)
         if cfg.stop_event is not None and cfg.stop_event.is_set():
             msg = "Okay, I stopped."

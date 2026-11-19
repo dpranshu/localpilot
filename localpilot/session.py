@@ -24,6 +24,15 @@ _CONTROL = re.compile(
     re.IGNORECASE)
 
 
+_RESUME = re.compile(r"^\s*(?:ok(?:ay)?[\s,]+|yes[\s,]+|yeah[\s,]+|please[\s,]+|you can[\s,]+)?"
+                     r"(continue|resume|go on|carry on|keep going|proceed|go ahead|unpause)\b", re.I)
+
+
+def is_resume(text: str) -> bool:
+    """An explicit go-ahead to continue a PAUSED task. Nothing else resumes one."""
+    return bool(_RESUME.match(text or ""))
+
+
 def is_control(text: str) -> bool:
     """A request to halt. Kept deliberately broad: stopping wrongly is cheap, not stopping isn't."""
     t = (text or "").strip()
@@ -67,9 +76,14 @@ class Session:
         self._emit("you", {"text": text, "source": source})
         if is_control(text):
             self.interrupt(text)
-            self.release()
             return "control"
-        self.release()                    # not a stop: let a held task continue
+        if is_resume(text):
+            return self.resume()
+        if self.paused:
+            # Anything that isn't "continue" or "stop" keeps the task paused -- it must never
+            # resume because the user said something else.
+            self._say_paused()
+            return "paused"
         with self._lock:
             if self.busy:
                 self._emit("say", {"text": f"I'm still working on: {self._task}. Say stop to cancel it."})
@@ -80,12 +94,38 @@ class Session:
             self._worker.start()
         return "started"
 
+    @property
+    def paused(self) -> bool:
+        return self.busy and self.cfg.hold_event.is_set()
+
     def hold(self):
-        """The user started speaking: pause before the next action until we hear what it was."""
-        if self.busy:
+        """The user started speaking: pause before the next action. Only an explicit
+        'continue' (resume()) or 'stop' (interrupt()) ends the pause -- never a timeout."""
+        if self.busy and not self.cfg.hold_event.is_set():
             self.cfg.hold_event.set()
+            self._emit("paused", {"task": self._task})
+
+    def resume(self) -> str:
+        """Explicit permission to continue a paused task."""
+        if not self.paused:
+            self._emit("say", {"text": "There's nothing paused right now."})
+            return "nothing"
+        self.cfg.hold_event.clear()
+        self._emit("resumed", {"task": self._task})
+        self._emit("say", {"text": f"Continuing: {self._task}."})
+        return "resumed"
+
+    def unheard(self):
+        """Speech was detected but nothing usable was transcribed: stay paused, say how to go on."""
+        if self.paused:
+            self._say_paused(prefix="I didn't catch that. ")
+
+    def _say_paused(self, prefix: str = ""):
+        self._emit("say", {"text": f"{prefix}I've paused: {self._task}. Say continue to carry on, "
+                                   "or stop to cancel it."})
 
     def release(self):
+        """Internal: clear a pause because the task ended or was cancelled (not a resume)."""
         self.cfg.hold_event.clear()
 
     def interrupt(self, text: str = "stop"):
@@ -124,6 +164,7 @@ class Session:
             reply = f"Something went wrong: {e}"
             self._emit("say", {"text": reply}); self._emit("done", {"text": reply, "ok": False})
         finally:
+            self.cfg.hold_event.clear()            # the task is over; nothing left to pause
             self._remember(text, reply, source)
             self._emit("busy", {"busy": False})
 
