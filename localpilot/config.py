@@ -23,6 +23,8 @@ class Config:
     verify_goal: bool = True                      # when the window title changes, ask "is the goal met?"
     # Personal memory: past runs + the user's own notes, recalled for similar tasks
     use_memory: bool = True
+    think_first: bool = True                      # the brain: understand, plan, answer, talk
+    speak_replies: bool = True                    # say replies aloud (offline Windows voice)
     memory_path: str = ""                         # "" = %APPDATA%\LocalPilot\memory.json
     user_context: str = ""                        # filled per run from memory (not a user knob)
 

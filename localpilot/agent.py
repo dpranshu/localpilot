@@ -759,7 +759,10 @@ def _wait_results(query: str, timeout: float = 10.0, hwnd=None) -> bool:
     query: in its title, or in its URL (checked about once a second)."""
     end, n, fixed = time.time() + timeout, 0, hwnd
     while time.time() < end:
-        hwnd = fixed or ctypes.windll.user32.GetForegroundWindow()
+        fg = ctypes.windll.user32.GetForegroundWindow()
+        if fixed and fg != fixed and web.query_in_title(query, _win_title(fg)):
+            fixed = fg                        # results came up in another (new) window
+        hwnd = fixed or fg
         title = _win_title(hwnd)
         if web.query_in_title(query, title):
             return True
@@ -877,17 +880,51 @@ def _settle(cfg, before, min_wait: float = 0.2, poll: float = 0.08):
 
 
 def _wait_for_app(app: str, windows_before, cfg, timeout: float = 10.0) -> bool:
-    """Wait until the app we launched is in front (new window or matching title)."""
-    end = time.time() + timeout
-    import ctypes
+    """Wait until the app we launched is in front (new window or matching title).
+    If its window exists but Windows left it BEHIND (an already-running app, focus-steal
+    rules), bring it to the front ourselves -- never act on the window that was in front."""
+    end, start = time.time() + timeout, time.time()
     while time.time() < end:
         hwnd = ctypes.windll.user32.GetForegroundWindow()
         title = _win_title(hwnd)
         if (windows_before is not None and hwnd not in windows_before and title) or                 _title_matches(title, app):
             time.sleep(0.25)                 # let the first frame paint
             return True
+        if time.time() - start > 0.8:
+            cand = _launched_window(app, windows_before)
+            if cand:
+                _activate(cand)
         time.sleep(0.1)
     return False
+
+
+def _launched_window(app: str, windows_before):
+    """A visible top-level window that is new since our action, or whose title is the app."""
+    new = [h for h in _top_windows() if windows_before is not None and h not in windows_before
+           and _win_title(h)]
+    if new:
+        return new[0]
+    for h in _top_windows():
+        if _title_matches(_win_title(h), app):
+            return h
+    return None
+
+
+def _activate(hwnd) -> bool:
+    """Bring a window to the front (AttachThreadInput: Windows otherwise refuses)."""
+    u, k = ctypes.windll.user32, ctypes.windll.kernel32
+    try:
+        if u.IsIconic(hwnd):
+            u.ShowWindow(hwnd, 9)                       # SW_RESTORE
+        cur = u.GetForegroundWindow()
+        t1 = u.GetWindowThreadProcessId(cur, 0)
+        t2 = k.GetCurrentThreadId()
+        u.AttachThreadInput(t1, t2, True)
+        u.SetForegroundWindow(hwnd); u.BringWindowToTop(hwnd)
+        u.AttachThreadInput(t1, t2, False)
+        return u.GetForegroundWindow() == hwnd
+    except Exception:
+        return False
 
 
 def _fg_window():

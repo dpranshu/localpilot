@@ -53,7 +53,23 @@ def _fmt(rec: dict) -> str | None:
     if e == "ping":
         return rec.get("message", "")
     if e == "_final":
+        if rec.get("quiet"):                     # brain mode: the reply was already shown
+            return None
         return f"=== {rec.get('final','')[:120]} ==="
+    if e == "_you":
+        return f"\nYou:  {rec.get('text','')}"
+    if e == "_plan":
+        p = rec.get("plan", {})
+        out = f"  (thinking) {p.get('thought','')}" if p.get("thought") else ""
+        if p.get("steps"):
+            out += "\n  Plan:\n" + "\n".join(f"    {i}. {s}" for i, s in enumerate(p["steps"], 1))
+        return out or None
+    if e == "_say":
+        return f"LocalPilot:  {rec.get('text','')}"
+    if e == "_step":
+        return f"  > step {rec.get('i')}/{rec.get('n')}: {rec.get('step','')}"
+    if e == "_step_done":
+        return f"    {'OK' if rec.get('ok') else 'X'}  {rec.get('final','')[:110]}"
     return None
 
 
@@ -125,17 +141,19 @@ class App:
         # task row
         tf = tk.Frame(self.root, bg=BG)
         tf.pack(fill="x", padx=10)
-        ttk.Label(tf, text="Task").pack(side="left")
+        ttk.Label(tf, text="Ask").pack(side="left")
         self.task = tk.Entry(tf, bg="#1f1f29", fg=FG, insertbackground=FG,
                              relief="flat", font=("Segoe UI", 11))
         self.task.pack(side="left", fill="x", expand=True, padx=8, ipady=5)
         self.task.bind("<Return>", lambda e: self.on_run())
-        self._ph = "e.g.  open Brave and play Navaan Sandhu on YouTube"
+        self._ph = "Ask or tell me anything -- e.g. I'm bored / what's the weather / set me up for work"
         self._ph_on = False
         self._show_ph()
         self.task.bind("<FocusIn>", lambda e: self._clear_ph())
         self.task.bind("<FocusOut>", lambda e: self._show_ph())
-        self.run_btn = ttk.Button(tf, text="Run", style="Accent.TButton", command=self.on_run)
+        self.mic_btn = ttk.Button(tf, text="\U0001F3A4", width=3, command=self.on_mic)
+        self.mic_btn.pack(side="left", padx=(0, 4))
+        self.run_btn = ttk.Button(tf, text="Go", style="Accent.TButton", command=self.on_run)
         self.run_btn.pack(side="left")
         self.stop_btn = ttk.Button(tf, text="Stop", command=self.on_stop, state="disabled")
         self.stop_btn.pack(side="left", padx=4)
@@ -168,7 +186,10 @@ class App:
         self.v_real = tk.BooleanVar(value=self.cfg.real_cursor)
         self.v_harness = tk.BooleanVar(value=self.cfg.harness_enabled)
         self.v_mem = tk.BooleanVar(value=self.cfg.use_memory)
-        toggles = [("Ask before risky actions", self.v_harness), ("Use my history", self.v_mem),
+        self.v_think = tk.BooleanVar(value=self.cfg.think_first)
+        self.v_speak = tk.BooleanVar(value=self.cfg.speak_replies)
+        toggles = [("Think first", self.v_think), ("Speak replies", self.v_speak),
+                   ("Ask before risky actions", self.v_harness), ("Use my history", self.v_mem),
                    ("Confirm each step", self.v_confirm), ("Dry run", self.v_dry),
                    ("Agent cursor", self.v_cursor), ("Overlay", self.v_overlay),
                    ("Real cursor", self.v_real)]
@@ -251,6 +272,8 @@ class App:
         self.cfg.real_cursor = self.v_real.get()
         self.cfg.harness_enabled = self.v_harness.get()
         self.cfg.use_memory = self.v_mem.get()
+        self.cfg.think_first = self.v_think.get()
+        self.cfg.speak_replies = self.v_speak.get()
 
     # ---------- history & personal context ----------
     def open_history(self):
@@ -354,6 +377,9 @@ class App:
         self._orb_state = "thinking"
         self.run_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
+        if self.cfg.think_first:
+            self._ask(goal)
+            return
         self.set_status("Running… focus your target window during the 3s countdown.", "run")
         self.append(f"\n=== RUN ({self.cfg.backend}): {goal} ===")
         self.root.iconify()   # get the panel out of the way so it isn't acted on
@@ -365,6 +391,52 @@ class App:
                 final = UnfinishedRun(f"error: {e}")
             self.logq.put({"event": "_final", "final": final})
         threading.Thread(target=worker, daemon=True).start()
+
+    def _ask(self, text):
+        """Brain mode: think -> say -> do the plan step by step -> report."""
+        from . import assistant
+        self.set_status("Thinking…", "run")
+        self.logq.put({"event": "_you", "text": text})
+        if not hasattr(self, "_conversation"):
+            self._conversation = []
+        prefs = self.memory.preferences() if self.cfg.use_memory else ""
+        convo = list(self._conversation)
+
+        def on_event(kind, data):
+            if kind == "plan":
+                self.logq.put({"event": "_plan", "plan": data})
+                if data.get("steps"):
+                    self.logq.put({"event": "_hide"})        # get out of the way of the PC
+            elif kind == "say":
+                self.logq.put({"event": "_say", "text": data["text"]})
+            elif kind == "step":
+                self.logq.put({"event": "_step", **data})
+            elif kind == "step_done":
+                self.logq.put({"event": "_step_done", **data})
+
+        def worker():
+            try:
+                final = assistant.handle(text, self.cfg, on_event, prefs, convo)
+            except Exception as e:
+                final = UnfinishedRun(f"error: {e}")
+            self._conversation += [{"role": "user", "content": text},
+                                   {"role": "assistant", "content": str(final)}]
+            self._conversation = self._conversation[-12:]
+            self.logq.put({"event": "_final", "final": final, "quiet": True})
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_mic(self):
+        """Listen for one spoken request (offline Windows speech), then ask it."""
+        if self.running:
+            return
+        from . import voice
+        self.mic_btn.config(state="disabled")
+        self.set_status("Listening… speak now.", "run")
+
+        def work():
+            heard = voice.listen()
+            self.logq.put({"event": "_heard", "text": heard})
+        threading.Thread(target=work, daemon=True).start()
 
     def on_stop(self):
         if not self.running:
@@ -447,6 +519,25 @@ class App:
             while True:
                 rec = self.logq.get_nowait()
                 e = rec.get("event")
+                if e == "_heard":
+                    self.mic_btn.config(state="normal")
+                    if rec["text"]:
+                        self._clear_ph(); self.task.delete(0, "end"); self.task.insert(0, rec["text"])
+                        self.on_run()
+                    else:
+                        self.set_status("I didn't catch that (check the microphone).", "err")
+                    continue
+                if e == "_hide":
+                    try:
+                        self.root.iconify()
+                    except Exception:
+                        pass
+                    continue
+                if e == "_say" and self.cfg.speak_replies:
+                    from . import voice
+                    if not voice.speak(rec["text"]) and not getattr(self, "_voice_warned", False):
+                        self._voice_warned = True
+                        self.append("  (voice: no working audio output on this PC -- replies are shown here)")
                 if e == "_setup":
                     self.set_status(rec["message"], "info")
                     continue

@@ -548,3 +548,30 @@ A wider set of 15 everyday tasks went from 9/15 to 15/15. Each failure was trace
 | Focus | after the *model* opens an app, LocalPilot works in that app (it used to return to the previous window) |
 
 All three batteries together: 31/31 tasks with 0 false claims; most tasks take 1–9 s.
+
+## The brain (v1.0.0)
+
+A layer in front of everything above makes LocalPilot an assistant, not just a command runner:
+
+```
+you (typed, or 🎤 offline Windows speech) ─▶ brain.think ─▶ {intent, thought, reply, steps}
+     answer : maths, time, date (exact, local) or knowledge (model) ─▶ reply, no apps opened
+     chat   : greetings, thanks                                       ─▶ reply
+     do     : intent → 1-4 concrete steps in the skills' own phrasings ─▶ assistant runs each
+     clarify: one short question, only when a guess would annoy
+```
+
+- Clear commands ("Search YouTube for X") skip the model entirely, so they stay fast.
+- Your preferences ("My context…") shape plans: browser, music taste, apps.
+- **Plan checks** (`_fix_steps`):
+  - an app that isn't installed switches to its web version (Spotify, WhatsApp, Outlook…), or LocalPilot says it's missing;
+  - "Open Notepad" plus "Type: X" are merged into one step, and a separate "Save it as" step is merged in too;
+  - save steps you didn't ask for are dropped, as are redundant "open site" steps;
+  - how-to questions are answered, not typed into Notepad;
+  - stray control characters from the model's JSON are removed.
+- `assistant.handle` runs the steps in order. It stops at the first failed step and says why ("I did 1 of 3 steps, but…").
+- `voice.py`: replies are spoken with the offline Windows voice (SAPI), and the 🎤 button uses offline System.Speech recognition. Nothing leaves the PC.
+- Window focus: if a launched app's window opens *behind* another window, LocalPilot brings it to the front, and never acts on the old window.
+
+Battery: 10 natural requests ("I'm bored", "is it going to rain in Mumbai", "find cheap headphones",
+"how do I make tea", "who wrote Harry Potter", …) passed 10/10. Together with the 31 earlier tasks: 41/41, 0 false claims.

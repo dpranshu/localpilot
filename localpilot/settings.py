@@ -17,6 +17,7 @@ SAVED = {
     "backend": str, "model": str, "max_steps": int, "harness_enabled": bool,
     "use_memory": bool, "confirm_each_step": bool, "dry_run": bool,
     "show_cursor": bool, "show_overlay": bool, "real_cursor": bool,
+    "think_first": bool, "speak_replies": bool,
 }
 _CHOICES = {"backend": {"uia", "vision", "hybrid"}}
 
