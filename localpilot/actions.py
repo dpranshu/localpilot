@@ -299,6 +299,13 @@ def _escape_sendkeys(text: str) -> str:
     return "".join(out)
 
 
+def _current_value(control) -> str:
+    try:
+        return control.GetValuePattern().Value or ""
+    except Exception:
+        return ""
+
+
 def execute(cfg, action: dict, elements) -> ActionResult:
     kind = str(action.get("action", "")).lower()
     say = action.get("say", "")
@@ -332,6 +339,8 @@ def execute(cfg, action: dict, elements) -> ActionResult:
 
     if kind == "hotkey":
         keys = str(action.get("keys", "")).strip()
+        if not keys and "address" in str(say).lower():   # model said "focus address bar"
+            keys = "ctrl+l"
         if not keys:
             return ActionResult(False, "hotkey missing 'keys'")
         try:
@@ -406,12 +415,17 @@ def execute(cfg, action: dict, elements) -> ActionResult:
                     time.sleep(0.15)
                     if not el.control.HasKeyboardFocus:
                         raise RuntimeError("target editor does not have keyboard focus")
-                    inputs.typewrite(body, interval=0.02)
+                    if _current_value(el.control).strip().lower() == body.strip().lower():
+                        how = "text already there (autocomplete/earlier typing) -> Enter only"
+                    else:
+                        if el.role != "Document":
+                            inputs.hotkey("ctrl", "a")   # replace what's there, never append
+                        inputs.typewrite(body, interval=0.02)
+                        how = "typed (keys) + Enter"
                     time.sleep(0.2)
                     if not el.control.HasKeyboardFocus:
                         raise RuntimeError("focus changed before Enter")
                     inputs.press("enter")
-                    how = "typed (keys) + Enter"
                 else:
                     how = _type_control(el.control, body)
                     if submit:

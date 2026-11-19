@@ -511,3 +511,21 @@ Each layer of the loop (command → harness → action model → executor → ob
 
 Battery (7 real tasks, `uia` backend) before → after: Calculator maths 31 → 3 s (clear + type once, no model), Notepad 20 → 9 s, Brave and a URL 22 → 2 s,
 Settings › Bluetooth 24 → 14 s, Explorer › Downloads 21 → 9 s, open-only goals about 1 s; 7/7 passed with 0 false claims.
+
+## Web layer (v0.9.2)
+
+`web.py` reads a goal as *browser + site + query* before the model runs.
+
+- **Search on a site** ("search YouTube for X", "go to amazon.com and search X", "X on youtube in brave"):
+  the site's own results page opens directly (about 25 known sites).
+- **Search the web:** the browser's own engine (Brave Search for Brave, Google for Chrome, Bing for Edge).
+- **Unknown site:** LocalPilot opens it, finds the page's own search box (an Edit or ComboBox named "search"),
+  selects all, types once and presses Enter once.
+- **No browser named:** the Windows default browser is used. The `UserChoiceLatest` key is read first,
+  because the older `UserChoice` key can be stale.
+- **Done** requires the results to be open: the search words are in the title, or in the address-bar URL.
+- **Executor:** typing into a field whose text already matches only presses Enter (covers autocomplete).
+  Otherwise it selects all first, so the text replaces what's there instead of being appended.
+- **Focus pin:** after opening an app, LocalPilot works in the new window, never the one that was in front.
+
+Browser battery before → after: 0/9 with 4 false claims → 9/9 with 0 false claims, mostly 1–4 s per search.

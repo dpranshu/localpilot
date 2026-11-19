@@ -27,6 +27,15 @@ Rules:
   WITH a trailing \n to submit in the SAME step. End ANY text with \n to press Enter after typing --
   this is the reliable way to search/go. Example to search YouTube: step 1 hotkey ctrl+l ;
   step 2 type_text "https://www.youtube.com/results?search_query=navaan sandhu\n".
+- TWO different search boxes -- pick the right one:
+  * the browser ADDRESS BAR searches the whole web (Brave Search / Google). Use it ONLY for
+    "search the web / google X", or to go to a URL.
+  * a WEBSITE's own search box (YouTube, Amazon, Wikipedia, GitHub ...) searches inside that site.
+    When the goal says search ON / IN a site, and that site is open, "type" into the page's own
+    Edit/ComboBox named like "Search" (never the address bar), with \n at the end.
+- Before typing, look at the field: if it ALREADY shows your text (autocomplete or an earlier step),
+  do not type it again -- press Enter (hotkey enter) or click the matching suggestion.
+- If a step says the search results are ALREADY open, never search again: continue with the rest.
 - Do NOT use a separate "hotkey enter" after typing in a browser address bar -- append \n to the text
   instead, so typing and Enter happen together (a separate Enter step often fails there).
 - "type" needs an id and targets that control; "type_text" types into whatever is focused now.
