@@ -148,7 +148,10 @@ def typed_items(goal: str) -> list[str]:
     """'type a shopping list: milk, eggs, bread' -> ['milk', 'eggs', 'bread'];
     'type hello world, and save it as X' -> ['hello world']. [] if the goal is not a typing goal."""
     import re as _re
-    m = _re.search(r"\b(?:type|write|enter)\b(?:[^:]{0,40}:)?\s*(.+?)"
+    # drop the "and save it as C:\..." tail first: its drive colon is not a list colon
+    goal = _re.sub(r",?\s+(?:and|then)\s+(?:save|press|close|send)\b.*$", "", goal or "",
+                   flags=_re.IGNORECASE)
+    m = _re.search(r"\b(?:type|write|enter)\b(?:[^:]{0,40}:(?![\\/]))?\s*(.+?)"
                    r"(?:,?\s+(?:and|then)\s+(?:save|press|close|send)\b.*)?\s*[.!]?\s*$",
                    goal or "", _re.IGNORECASE)
     if not m:
