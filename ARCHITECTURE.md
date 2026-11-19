@@ -509,5 +509,5 @@ Each layer of the loop (command → harness → action model → executor → ob
 | Executor | a URL typed into a browser always goes to the address bar (Ctrl+L first) | no typing into pages |
 | Observer | `_settle` returns as soon as the UI changes and holds still (capped by `settle_seconds`); `_wait_ui_ready` waits for a launched app's controls to stop appearing | no fixed sleeps; no acting on half-loaded windows |
 
-Battery (7 real tasks, `uia` backend) before → after: Calculator maths 31 → 14 s, Notepad 20 → 9 s, Brave and a URL 22 → 2 s,
+Battery (7 real tasks, `uia` backend) before → after: Calculator maths 31 → 3 s (clear + type once, no model), Notepad 20 → 9 s, Brave and a URL 22 → 2 s,
 Settings › Bluetooth 24 → 14 s, Explorer › Downloads 21 → 9 s, open-only goals about 1 s; 7/7 passed with 0 false claims.

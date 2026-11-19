@@ -59,6 +59,20 @@ class BrowserFastPathTests(unittest.TestCase):
         self.assertFalse(agent._BROWSER_TITLE.search("Untitled - Notepad"))
 
 
+class CalculatorFastPathTests(unittest.TestCase):
+    def test_expression(self):
+        self.assertEqual(agent.llm.math_expression("Open Calculator and calculate 25 times 4"), "25*4")
+        self.assertEqual(agent.llm.math_expression("open calculator"), None)
+
+    def test_clears_then_types_once_without_model(self):
+        typed = []
+        with patch.object(actions, "app_from_goal", return_value="Calculator"),              patch.object(actions, "_launch_app", return_value=actions.ActionResult(True, "launched")),              patch.object(agent, "_wait_for_app", return_value=True),              patch.object(agent, "_wait_ui_ready"),              patch.object(agent, "perceive", return_value=("Calculator", [], "Display is 100")),              patch.object(actions.inputs, "press", side_effect=lambda k: typed.append(k)),              patch.object(actions.inputs, "write", side_effect=lambda t, interval=0: typed.append(t)),              patch.object(agent.llm, "ping", return_value=(True, "ok")),              patch.object(agent.llm, "warm"),              patch.object(agent.llm, "decide", side_effect=AssertionError("model called")):
+            final = agent._run_impl("Open Calculator and calculate 25 times 4",
+                                    Config(show_overlay=False, max_steps=3))
+        self.assertTrue(final.startswith("done"), final)
+        self.assertEqual(typed, ["esc", "25*4="])
+
+
 class ObserverTests(unittest.TestCase):
     def test_settle_returns_early_when_screen_changes(self):
         seq = iter([("w", "a")] + [("w", "b")] * 50)

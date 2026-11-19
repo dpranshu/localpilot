@@ -307,6 +307,25 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                         overlay.done(final[:60]); time.sleep(0.6); break
                 if appeared:
                     _wait_ui_ready(cfg)      # don't let the model look at a half-loaded window
+                expr = llm.math_expression(goal) if "calc" in auto_app.lower() else None
+                if appeared and expr and not cfg.dry_run:
+                    # Calculator maths: clear, type the expression, read the answer. No model.
+                    actions.inputs.press("esc")
+                    actions.inputs.write(expr + "=", interval=0.02)
+                    history.append(f"step {step}: typed {expr}= into Calculator (auto)")
+                    logger.log({"event": "action", "step": step, "mode": "uia",
+                                "action": {"action": "type_text", "text": expr + "=", "say": "auto"},
+                                "result": f"[OK] typed {expr}= (fast path)"})
+                    time.sleep(0.4)
+                    try:
+                        t2, _, r2 = perceive(cfg)
+                        met, why = llm.check_goal(cfg, goal, t2, r2)
+                    except Exception:
+                        met, why = False, ""
+                    if met:
+                        final = f"done: {why}"
+                        logger.log({"event": "goal_check", "step": step, "done": True, "why": why})
+                        overlay.done(final[:60]); time.sleep(0.6); break
                 else:
                     time.sleep(cfg.settle_seconds)
                 continue
@@ -441,6 +460,11 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                         actions.inputs.hotkey("ctrl", "l"); time.sleep(0.15)
                         action = {"action": "type_text", "text": action["text"],
                                   "say": action.get("say", "")}
+                    except Exception:
+                        pass
+                if akind in ("type", "type_text") and "=" in t and                         (title or "").strip().lower() == "calculator" and not cfg.dry_run:
+                    try:                              # start the sum fresh: no leftover digits
+                        actions.inputs.press("esc"); time.sleep(0.05)
                     except Exception:
                         pass
                 addr_armed = (akind == "hotkey"

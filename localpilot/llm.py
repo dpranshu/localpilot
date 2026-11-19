@@ -106,6 +106,18 @@ def goal_terms_on_screen(goal: str, title: str, rendered: str, need: float = 0.8
     return not goal_missing_terms(goal, title, rendered, need)
 
 
+_OPS = {"times": "*", "x": "*", "*": "*", "multiplied by": "*", "plus": "+", "+": "+",
+        "minus": "-", "-": "-", "divided by": "/", "/": "/"}
+
+
+def math_expression(goal: str) -> str | None:
+    """'calculate 25 times 4' -> '25*4' (keys Calculator understands); else None."""
+    import re as _re
+    m = _re.search(r"(-?\d+(?:\.\d+)?)\s*(times|x|\*|multiplied by|plus|\+|minus|-|divided by|/)\s*"
+                   r"(-?\d+(?:\.\d+)?)", (goal or "").lower())
+    return f"{m.group(1)}{_OPS[m.group(2)]}{m.group(3)}" if m else None
+
+
 def math_answer(goal: str) -> str | None:
     """'calculate 25 times 4' -> '100'. Only simple 'A op B' goals; else None."""
     import re as _re
