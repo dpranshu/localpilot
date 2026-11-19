@@ -102,8 +102,8 @@ class App:
 
         try:
             import os
-            ico = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "localpilot.ico")
+            from .config import resource_path
+            ico = resource_path("localpilot.ico")
             if os.path.exists(ico):
                 self.root.iconbitmap(ico)
         except Exception:
@@ -385,7 +385,11 @@ class App:
         self.set_status(msg, "ok" if state == "ok" else "err")
         if state != "ok":
             self.append(f"[setup] {msg}")
-        if state == "not_running":
+        label = {"not_running": "Start AI engine", "not_installed": "Install AI engine",
+                 "model_missing": "Download model"}.get(state)
+        self._health_state = state
+        if label:
+            self.fix_btn.config(text=label, state="normal")
             self.fix_btn.pack(side="left", padx=6, before=self._quit_btn)
         else:
             self.fix_btn.pack_forget()
@@ -394,6 +398,26 @@ class App:
 
     def on_start_engine(self):
         from . import health
+        state = getattr(self, "_health_state", "not_running")
+        if state in ("not_installed", "model_missing"):
+            self.fix_btn.config(state="disabled")
+
+            def say(msg):
+                self.logq.put({"event": "_setup", "message": msg})
+
+            def work():
+                ok = True
+                if state == "not_installed":
+                    ok = health.install_ollama(say) and health.start_ollama()
+                    import time; time.sleep(4)
+                    if ok and health.check(self.cfg)[0] == "model_missing":
+                        ok = health.pull_model(self.cfg, progress=say)
+                else:
+                    ok = health.pull_model(self.cfg, progress=say)
+                say("Setup finished." if ok else "Setup did not finish - see the log above.")
+                self._health_worker()
+            threading.Thread(target=work, daemon=True).start()
+            return
         if health.start_ollama():
             self.set_status("Starting the AI engine...", "info")
             self.root.after(5000, self.on_check)
@@ -418,6 +442,9 @@ class App:
             while True:
                 rec = self.logq.get_nowait()
                 e = rec.get("event")
+                if e == "_setup":
+                    self.set_status(rec["message"], "info")
+                    continue
                 if e == "_health":
                     self._show_health(rec["state"], rec["message"])
                     continue

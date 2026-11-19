@@ -110,27 +110,32 @@ python run.py --model qwen2.5:3b-instruct --steps 20 --confirm "your goal"
 | `--steps <n>` | Override the step cap |
 | `--check` / `--probe` | Verify model / print what the agent sees, then exit |
 
-## Single .exe (no Python needed to run)
+## Windows installer (no Python needed to run)
 
-Build the desktop app as a **one-folder** bundle (recommended for selling: it keeps the LGPL
-`pystray` package replaceable, as its license requires -- see `THIRD_PARTY_NOTICES.md`):
+One command builds the app and the installer (needs PyInstaller and Inno Setup 6:
+`pip install pyinstaller`, `winget install JRSoftware.InnoSetup`):
 
-```bash
-pip install pyinstaller
-python -m PyInstaller --onedir --noconsole --name LocalPilot --icon localpilot.ico \
-  --collect-submodules pystray --collect-submodules comtypes --collect-submodules uiautomation \
-  --hidden-import PIL._tkinter_finder --hidden-import pystray._win32 localpilot_app.py
+```bat
+build_installer.bat
 ```
-The result is **`dist/LocalPilot/LocalPilot.exe`** (ship the whole `dist/LocalPilot` folder) --
-double-click to open the control panel; no Python install required on the target machine.
+Output:
+- **`dist/LocalPilot/`**: the one-folder app (`LocalPilot.exe`; `LocalPilot.exe --tray` for tray mode).
+  `pystray` (LGPL) ships as loose, replaceable files in `_internal/pystray`, as its license requires.
+- **`dist/LocalPilot-Setup-<version>.exe`**: the installer ([installer/LocalPilot.iss](installer/LocalPilot.iss)).
+  It is a per-user install (no admin prompt) into `%LOCALAPPDATA%\Programs\LocalPilot`, with a Start Menu
+  entry, an optional desktop icon, an optional "start in tray at sign-in" option, a license page, and an
+  uninstaller. User data in `%APPDATA%\LocalPilot` (history, settings, logs) is kept on uninstall.
 
-> **Windows Smart App Control / App Control policies may block it.** The exe is *unsigned*, and
-> with Smart App Control in *Enforce* mode Windows refuses to run unsigned executables
-> ("An Application Control policy has blocked this file"). Options: sign the exe with a trusted
-> code-signing certificate, or just use the Python launcher, which is unaffected because
-> `python.exe` is signed -- double-click **`start_app.bat`** (control panel) or
-> **`start_tray.bat`** (tray). Don't disable Smart App Control just for this. **Ollama is still required separately** (it's the model
-server, multi-GB; the exe bundles only the agent client). Start Ollama and pull a model first.
+**First run:** the panel checks the setup automatically and offers one button for each problem it finds:
+**Install AI engine** (installs Ollama via winget, or with the official installer), **Start AI engine**,
+or **Download model** (about 5 GB, with progress shown). The buyer never needs a terminal.
+
+> **Code signing is required before you sell it.** Both exes are *unsigned*. Smart App Control
+> ("An Application Control policy has blocked this file") and SmartScreen block or warn about unsigned
+> apps. Sign `dist/LocalPilot/LocalPilot.exe` *and* the setup exe with a code-signing certificate
+> (`signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 ...`; Inno Setup can do it
+> with `SignTool=`). Until then, use **`start_app.bat`** / **`start_tray.bat`** (signed `python.exe`).
+> Don't disable Smart App Control. `installer/EULA.txt` is a **draft**: replace it with your own terms.
 
 ## Desktop control panel
 

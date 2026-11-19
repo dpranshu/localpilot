@@ -132,10 +132,13 @@ def _on_panel(icon, item):
     import os
     import subprocess
     import sys
-    pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-    exe = pyw if os.path.exists(pyw) else sys.executable
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable]                      # LocalPilot.exe opens the panel
+    else:
+        pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        cmd = [pyw if os.path.exists(pyw) else sys.executable, "-m", "localpilot.gui"]
     try:
-        subprocess.Popen([exe, "-m", "localpilot.gui"],
+        subprocess.Popen(cmd,
                          cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     except Exception as e:
         _notify("LocalPilot", f"panel error: {e}")

@@ -54,7 +54,7 @@ class HealthTests(unittest.TestCase):
             self.assertEqual(health.check(cfg)[0], health.OK)
         with patch.object(health.requests, "get", return_value=self.resp(["other:1b"])):
             state, msg = health.check(cfg)
-            self.assertEqual(state, health.MODEL_MISSING); self.assertIn("install.bat", msg)
+            self.assertEqual(state, health.MODEL_MISSING); self.assertIn("Download model", msg)
         with patch.object(health.requests, "get", side_effect=OSError("refused")):
             with patch.object(health, "find_ollama", return_value="C:/ollama.exe"):
                 self.assertEqual(health.check(cfg)[0], health.NOT_RUNNING)

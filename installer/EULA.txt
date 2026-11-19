@@ -1,0 +1,17 @@
+LocalPilot - End User License Agreement  (DRAFT - replace before selling)
+
+Copyright (c) LocalPilot. All rights reserved.
+
+1. License. You may install and use LocalPilot on computers you own or control.
+2. Restrictions. You may not resell, sublicense or redistribute LocalPilot
+   except as permitted in writing by the copyright holder.
+3. Third-party components are licensed under their own terms; see
+   THIRD_PARTY_NOTICES.md (installed with the program). Nothing in this
+   agreement limits your rights under those licenses, including your right
+   to replace the LGPL-licensed pystray library in the "_internal" folder.
+4. LocalPilot controls your mouse and keyboard to carry out tasks you give it.
+   You are responsible for the tasks you start. Review actions it asks you
+   to confirm.
+5. No warranty. LocalPilot is provided "AS IS", without warranty of any kind.
+   To the maximum extent permitted by law the author is not liable for any
+   damages arising from its use.

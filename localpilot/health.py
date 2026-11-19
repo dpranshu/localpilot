@@ -35,13 +35,13 @@ def check(cfg) -> tuple[str, str]:
         if find_ollama():
             return NOT_RUNNING, ("The AI engine (Ollama) is installed but not running. "
                                  "Click 'Start AI engine'.")
-        return NOT_INSTALLED, ("The AI engine (Ollama) is not installed. Run install.bat "
-                               "(or python install.py) once, then restart LocalPilot.")
+        return NOT_INSTALLED, ("The AI engine (Ollama) is not installed. Click "
+                               "'Install AI engine'.")
     want = cfg.vision_model if cfg.backend == "vision" else cfg.model
     base = want.split(":")[0].split("/")[-1].lower()
     if not any(base in n.lower() for n in names):
-        return MODEL_MISSING, (f"The model '{want}' is not downloaded yet. Run install.bat "
-                               f"(or: ollama pull {want}).")
+        return MODEL_MISSING, (f"The model '{want}' is not downloaded yet. Click "
+                               f"'Download model' (about 5 GB, one time).")
     return OK, "Ready."
 
 
@@ -56,3 +56,70 @@ def start_ollama() -> bool:
         return True
     except Exception:
         return False
+
+
+OLLAMA_SETUP_URL = "https://ollama.com/download/OllamaSetup.exe"
+
+
+def install_ollama(progress=lambda msg: None) -> bool:
+    """Install Ollama for the current user: winget first, then the official installer."""
+    if find_ollama():
+        return True
+    if shutil.which("winget"):
+        progress("Installing the AI engine with winget...")
+        try:
+            subprocess.run(["winget", "install", "--id", "Ollama.Ollama", "-e", "--silent",
+                            "--accept-package-agreements", "--accept-source-agreements"],
+                           creationflags=0x08000000, timeout=900,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+        if find_ollama():
+            return True
+    import tempfile
+    dest = os.path.join(tempfile.mkdtemp(prefix="localpilot_"), "OllamaSetup.exe")
+    try:
+        with requests.get(OLLAMA_SETUP_URL, stream=True, timeout=30) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("content-length") or 0)
+            done = 0
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(1 << 20):
+                    f.write(chunk)
+                    done += len(chunk)
+                    if total:
+                        progress(f"Downloading the AI engine... {done * 100 // total}%")
+        progress("Installing the AI engine...")
+        subprocess.run([dest, "/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES"], timeout=900)
+    except Exception:
+        return False
+    return bool(find_ollama())
+
+
+def pull_model(cfg, model: str | None = None, progress=lambda msg: None) -> bool:
+    """Download a model through the running Ollama server, reporting % progress."""
+    import json
+    want = model or (cfg.vision_model if cfg.backend == "vision" else cfg.model)
+    try:
+        with requests.post(f"{cfg.ollama_url}/api/pull", json={"name": want, "stream": True},
+                           stream=True, timeout=(10, 600)) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                d = json.loads(line)
+                if d.get("error"):
+                    progress(f"Download failed: {d['error']}")
+                    return False
+                tot, got = d.get("total"), d.get("completed")
+                if tot and got:
+                    progress(f"Downloading model... {got * 100 // tot}% "
+                             f"({got / 1e9:.1f} of {tot / 1e9:.1f} GB)")
+                elif d.get("status"):
+                    progress(f"Model: {d['status']}")
+                if d.get("status") == "success":
+                    return True
+    except Exception as e:
+        progress(f"Download failed: {e}")
+        return False
+    return False

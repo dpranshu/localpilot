@@ -1,4 +1,5 @@
 """Central configuration for LocalPilot."""
+import os
 from dataclasses import dataclass, field
 
 
@@ -70,7 +71,7 @@ class Config:
     vision_stop_on_repeat: int = 2     # stop after this many identical no-progress actions
 
     # --- Logging ---
-    log_dir: str = "logs"
+    log_dir: str = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "LocalPilot", "logs")
     verbose: bool = True
 
     # --- Runtime hooks (set by the GUI; not CLI flags) ---
@@ -81,3 +82,10 @@ class Config:
 
 
 DEFAULT = Config()
+
+
+def resource_path(name: str) -> str:
+    """Path to a bundled file (works from source and from the PyInstaller build)."""
+    import sys
+    base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
