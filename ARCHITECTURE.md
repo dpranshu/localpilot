@@ -496,3 +496,18 @@ C:\reserchagi
 
 **Models (Ollama):** `qwen2.5:7b-instruct-q4_K_M` (text) · `hf.co/Mungert/UI-TARS-1.5-7B-GGUF:Q4_K_M` (vision) ·
 **Hardware this was built/tested on:** RTX 3050 (~8 GB), 24 GB RAM, i3-10105, Windows 11.
+
+
+## Speed layers (v0.9.1)
+
+Each layer of the loop (command → harness → action model → executor → observe/verify) got its own fast path:
+
+| Layer | Fast path | Effect |
+|---|---|---|
+| Harness | `apps.py` indexes every Start-menu app (`Get-StartApps`, cached in `%APPDATA%\LocalPilotpps.json`) and launches it via `shell:AppsFolder`. "Open X" goals finish **without the model** once X's window is in front. "Open <browser> and go to <url>" starts the browser directly at the URL. | open any app: about 1 s |
+| Action model | `127.0.0.1` instead of `localhost` (Windows IPv6 lookup cost **about 2 s per call**); `keep_alive=30m`; warm-up when the panel opens and while a run starts; `num_predict` cap | about 4 s saved per step |
+| Executor | a URL typed into a browser always goes to the address bar (Ctrl+L first) | no typing into pages |
+| Observer | `_settle` returns as soon as the UI changes and holds still (capped by `settle_seconds`); `_wait_ui_ready` waits for a launched app's controls to stop appearing | no fixed sleeps; no acting on half-loaded windows |
+
+Battery (7 real tasks, `uia` backend) before → after: Calculator maths 31 → 14 s, Notepad 20 → 9 s, Brave and a URL 22 → 2 s,
+Settings › Bluetooth 24 → 14 s, Explorer › Downloads 21 → 9 s, open-only goals about 1 s; 7/7 passed with 0 false claims.

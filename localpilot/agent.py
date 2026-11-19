@@ -207,8 +207,15 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
         os.makedirs(shot_dir, exist_ok=True)
 
     print(f"\nGOAL: {goal}")
-    print(f"Hold F12 to emergency-stop. Starting in 3s -- click the target window now...")
-    time.sleep(3)
+    auto_app = actions.app_from_goal(goal) if notepad is None else None
+    only_open = bool(auto_app) and actions.is_only_open(goal)
+    if notepad is None and not only_open:
+        llm.warm(cfg)                       # load the model into memory while we get ready
+    if auto_app or notepad is not None:
+        print("Hold F12 to emergency-stop.")   # we open the app ourselves: nothing to click
+    else:
+        print("Hold F12 to emergency-stop. Starting in 3s -- click the target window now...")
+        time.sleep(3)
 
     history: list[str] = []
     final = UnfinishedRun("max steps reached")
@@ -229,8 +236,8 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
     work_hwnd = work_pid = None # the app the agent is working in (focus pin)
     windows_before = None       # top-level windows that existed before our last action
     just_opened = ""            # app name our last action asked to open
-    auto_app = actions.app_from_goal(goal) if notepad is None else None
     drift = 0
+    before_sig = None
     done_rejects = 0
     repeat = 0
 
@@ -277,13 +284,31 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
             # model never starts by typing into whatever window happens to be in front.
             if auto_app and step == 1 and not cfg.dry_run:
                 windows_before, just_opened = _top_windows(), auto_app
-                res = actions._launch_app(auto_app)
+                url = actions.url_from_goal(goal) if actions.is_browser(auto_app) else None
+                res = (actions.launch_browser_at(auto_app, url) if url
+                       else actions._launch_app(auto_app))
                 work_hwnd, work_pid = fg_hwnd, fg_pid
                 logger.log({"event": "action", "step": step, "result": str(res), "mode": "uia",
                             "action": {"action": "open_app", "name": auto_app, "say": "auto"}})
                 history.append(f"step {step}: open_app {auto_app} -> {res}")
                 acted = acted or res.ok
-                time.sleep(max(cfg.settle_seconds, 1.5))
+                appeared = res.ok and _wait_for_app(auto_app, windows_before, cfg)
+                if only_open and appeared:
+                    final = f"done: opened {auto_app}"
+                    logger.log({"event": "goal_check", "step": step, "done": True,
+                                "why": "the app's window is open (fast path, no model needed)"})
+                    overlay.done(final[:60]); time.sleep(0.6); break
+                if url and appeared and actions.is_open_and_visit(goal):
+                    site = _site_word(url)
+                    if _wait_title_has(site, cfg):
+                        final = f"done: opened {auto_app} at {url}"
+                        logger.log({"event": "goal_check", "step": step, "done": True,
+                                    "why": f"browser title shows '{site}' (fast path, no model)"})
+                        overlay.done(final[:60]); time.sleep(0.6); break
+                if appeared:
+                    _wait_ui_ready(cfg)      # don't let the model look at a half-loaded window
+                else:
+                    time.sleep(cfg.settle_seconds)
                 continue
 
             # Focus pin: follow focus ONLY to a window our last action created, or to the
@@ -411,6 +436,13 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                 if (addr_armed or looks_url) and akind in ("type", "type_text") \
                         and t.strip() and not t.endswith("\n"):
                     action["text"] = t + "\n"          # a URL is always meant to be opened
+                if looks_url and akind in ("type", "type_text") and not addr_armed                         and _BROWSER_TITLE.search(title or "") and not cfg.dry_run:
+                    try:                              # never type a URL into the page itself
+                        actions.inputs.hotkey("ctrl", "l"); time.sleep(0.15)
+                        action = {"action": "type_text", "text": action["text"],
+                                  "say": action.get("say", "")}
+                    except Exception:
+                        pass
                 addr_armed = (akind == "hotkey"
                               and "ctrl" in str(action.get("keys", "")).lower()
                               and str(action.get("keys", "")).lower().replace(" ", "").endswith("+l"))
@@ -451,6 +483,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                 _drive_cursor(cfg, overlay, center, action.get("action"), action.get("dir"))
                 _check_stop(cfg)
                 windows_before = _top_windows()
+                before_sig = _ui_signature()
                 just_opened = str(action.get("name", "")) if akind == "open_app" else ""
                 try:
                     result = actions.execute(cfg, action, elements)
@@ -484,7 +517,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                     final = result.detail
                     overlay.done(result.detail[:60]); time.sleep(1.4); break
 
-            time.sleep(cfg.settle_seconds)
+            _settle(cfg, before_sig)
             overlay.clear()
         else:
             overlay.stopped(final)
@@ -504,6 +537,102 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
     print(f"\n=== FINISHED: {final} ===")
     print(f"Log: {logger.path}")
     return final
+
+
+_BROWSER_TITLE = _re.compile(r"(brave|chrome|edge|firefox)\s*$", _re.IGNORECASE)
+
+
+def _site_word(url: str) -> str:
+    """'https://www.wikipedia.org/x' -> 'wikipedia'."""
+    host = _re.sub(r"^https?://", "", url).split("/")[0].lower()
+    parts = [p for p in host.split(".") if p not in ("www", "m")]
+    return parts[0] if parts else host
+
+
+def _wait_title_has(word: str, cfg, timeout: float = 10.0) -> bool:
+    import ctypes
+    end = time.time() + timeout
+    while time.time() < end:
+        if word and word in _win_title(ctypes.windll.user32.GetForegroundWindow()).lower():
+            return True
+        time.sleep(0.15)
+    return False
+
+
+def _wait_ui_ready(cfg, timeout: float = 4.0, poll: float = 0.2):
+    """Wait until the front window's controls stop appearing (app finished loading)."""
+    end, last, same = time.time() + timeout, -1, 0
+    while time.time() < end:
+        try:
+            n = len(perceive(cfg)[1])
+        except Exception:
+            n = -1
+        same = same + 1 if (n == last and n >= 5) else 0
+        if same >= 2:
+            return
+        last = n
+        time.sleep(poll)
+
+
+def _ui_signature():
+    """Cheap fingerprint of what the user would see change: window, title, focused control."""
+    try:
+        import ctypes
+        import uiautomation as auto
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        f = auto.GetFocusedControl()
+        val = ""
+        if f is not None:
+            try:
+                val = f.GetValuePattern().Value[:80]
+            except Exception:
+                pass
+        return (hwnd, _win_title(hwnd),
+                f.Name[:80] if f else "", val)
+    except Exception:
+        return None
+
+
+def _win_title(hwnd) -> str:
+    import ctypes
+    buf = ctypes.create_unicode_buffer(512)
+    ctypes.windll.user32.GetWindowTextW(hwnd, buf, 512)
+    return buf.value
+
+
+def _settle(cfg, before, min_wait: float = 0.2, poll: float = 0.08):
+    """Observe: return as soon as the UI changed and held still briefly; never longer than
+    cfg.settle_seconds. Replaces a fixed sleep after every action."""
+    time.sleep(min_wait)
+    if before is None:
+        time.sleep(max(0.0, cfg.settle_seconds - min_wait)); return
+    deadline = time.time() + max(0.0, cfg.settle_seconds - min_wait)
+    last = _ui_signature()
+    stable_since = None if last == before else time.time()
+    while time.time() < deadline:
+        time.sleep(poll)
+        cur = _ui_signature()
+        if cur != before and cur == last:
+            if stable_since and time.time() - stable_since >= 0.15:
+                return
+            stable_since = stable_since or time.time()
+        else:
+            stable_since = time.time() if cur != before else None
+        last = cur
+
+
+def _wait_for_app(app: str, windows_before, cfg, timeout: float = 10.0) -> bool:
+    """Wait until the app we launched is in front (new window or matching title)."""
+    end = time.time() + timeout
+    import ctypes
+    while time.time() < end:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        title = _win_title(hwnd)
+        if (windows_before is not None and hwnd not in windows_before and title) or                 _title_matches(title, app):
+            time.sleep(0.25)                 # let the first frame paint
+            return True
+        time.sleep(0.1)
+    return False
 
 
 def _fg_window():

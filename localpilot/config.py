@@ -7,9 +7,13 @@ from dataclasses import dataclass, field
 class Config:
     # --- Model / Ollama ---
     model: str = "qwen2.5:7b-instruct-q4_K_M"   # swap to qwen2.5:3b-instruct if slow
-    ollama_url: str = "http://localhost:11434"
+    ollama_url: str = "http://127.0.0.1:11434"   # not "localhost": IPv6 lookup costs ~2s per call
     temperature: float = 0.1
     request_timeout: int = 120                    # seconds per model call
+    keep_alive: str = "30m"                       # keep the model in memory between tasks
+
+    def __post_init__(self):
+        self.ollama_url = (self.ollama_url or "").replace("://localhost", "://127.0.0.1")
 
     # --- Agent loop ---
     max_steps: int = 40                           # hard cap on actions per task

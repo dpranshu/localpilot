@@ -383,6 +383,11 @@ class App:
 
     def _show_health(self, state, msg):
         self.set_status(msg, "ok" if state == "ok" else "err")
+        if state == "ok" and not getattr(self, "_warmed", False):
+            self._warmed = True                     # ready before the user hits Run
+            from . import llm, apps
+            llm.warm(self.cfg)
+            threading.Thread(target=apps.all_apps, daemon=True).start()
         if state != "ok":
             self.append(f"[setup] {msg}")
         label = {"not_running": "Start AI engine", "not_installed": "Install AI engine",

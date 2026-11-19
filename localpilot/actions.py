@@ -93,8 +93,11 @@ def known_app(name: str) -> bool:
     if not low:
         return False
     keys = list(_APP_PATHS) + list(_APP_COMMANDS) + list(_FOLDERS)
-    return low.startswith("ms-settings:") or any(k == low or k in low.split() or low == k + " app"
-                                                 for k in keys) or low in ("file explorer", "explorer")
+    if low.startswith("ms-settings:") or any(k == low or k in low.split() or low == k + " app"
+                                             for k in keys) or low in ("file explorer", "explorer"):
+        return True
+    from . import apps
+    return apps.find(low) is not None             # anything in the Start menu
 
 
 def app_from_goal(goal: str) -> str | None:
@@ -107,6 +110,56 @@ def app_from_goal(goal: str) -> str | None:
         return None
     name = m.group(1).strip()
     return name if known_app(name) else None
+
+
+_URL_RE = r"(?:https?://\S+|www\.\S+|\b[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|in|edu|gov|co|dev|ai|app|me|tv)\b(?:/\S*)?)"
+
+
+def is_browser(name: str) -> bool:
+    return any(k in (name or "").lower() for k in _APP_PATHS)
+
+
+def url_from_goal(goal: str) -> str | None:
+    """'Open Brave and go to wikipedia.org' -> 'https://wikipedia.org' (first URL-looking token)."""
+    import re
+    m = re.search(_URL_RE, goal or "", re.IGNORECASE)
+    if not m:
+        return None
+    u = m.group(0).rstrip(".,;!)")
+    return u if u.lower().startswith("http") else "https://" + u
+
+
+def is_open_and_visit(goal: str) -> bool:
+    """True when the whole goal is 'open <browser> and go to <url>' (nothing after)."""
+    import re
+    return bool(re.fullmatch(r"\s*(?:please\s+)?(?:open|launch|start)\s+[\w ]+?\s+(?:and\s+|then\s+|,\s*)?"
+                             r"(?:go\s+to|open|visit|navigate\s+to|load)\s+" + _URL_RE + r"\s*[.!]?\s*",
+                             goal or "", re.IGNORECASE))
+
+
+def launch_browser_at(name: str, url: str) -> ActionResult:
+    """Start the browser directly on the URL: no address bar, no typing, no stale tab."""
+    for key, rels in _APP_PATHS.items():
+        if key in (name or "").lower():
+            p = _find_exe(rels)
+            if p:
+                try:
+                    _sp.Popen([p, "--new-window", url])
+                    return ActionResult(True, f"launched {key} at {url}")
+                except Exception as e:
+                    return ActionResult(False, f"launch failed: {e}")
+    return _launch_app(name)
+
+
+def is_only_open(goal: str) -> bool:
+    """True for goals that are *only* "open X" (nothing to do after the app is up)."""
+    import re
+    g = goal or ""
+    if not re.fullmatch(r"\s*(?:please\s+)?(?:open|launch|start)\s+(?:the\s+|my\s+)?"
+                        r"[\w .+&'-]+?(?:\s+app)?\s*[.!]?\s*", g, re.IGNORECASE):
+        return False
+    rest = g.split(None, 1)[-1] if g.split() else ""
+    return not re.search(r"\b(and|then|to|with|in|on|for|search|play|type)\b", rest, re.I)
 
 
 def _launch_app(name: str) -> ActionResult:
@@ -125,7 +178,13 @@ def _launch_app(name: str) -> ActionResult:
             _os.startfile(name.strip()); return ActionResult(True, f"opened {name.strip()}")
         except Exception as e:
             return ActionResult(False, f"could not open {name}: {e}")
-    # 1) known browsers / apps by path
+    # 1) any installed app, straight from the Start-menu index (no typing, no search)
+    if low not in ("notepad", "notepad app"):     # notepad keeps its fresh-tab handling
+        from . import apps
+        entry = apps.find(low)
+        if entry and apps.launch(entry):
+            return ActionResult(True, f"launched {entry['name']}")
+    # 2) known browsers / apps by path
     for key, rels in _APP_PATHS.items():
         if key in low:
             p = _find_exe(rels)

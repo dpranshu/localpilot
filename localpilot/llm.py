@@ -140,6 +140,7 @@ def check_goal(cfg, goal: str, title: str, rendered_elements: str) -> tuple[bool
     payload = {"model": cfg.model, "stream": False, "format": "json",
                "messages": [{"role": "system", "content": CHECK_PROMPT},
                             {"role": "user", "content": user}],
+               "keep_alive": getattr(cfg, "keep_alive", "30m"),
                "options": {"temperature": 0.0, "num_predict": 80}}
     try:
         r = requests.post(f"{cfg.ollama_url}/api/chat", json=payload, timeout=cfg.request_timeout)
@@ -149,6 +150,21 @@ def check_goal(cfg, goal: str, title: str, rendered_elements: str) -> tuple[bool
         return (done is True or str(done).lower() == "true"), str(data.get("why", ""))[:160]
     except Exception:
         return False, ""
+
+
+def warm(cfg, model: str | None = None) -> None:
+    """Load the model into GPU memory in the background (empty request), so the first
+    real step doesn't pay the multi-second load. Never raises, never blocks."""
+    import threading
+
+    def go():
+        try:
+            requests.post(f"{cfg.ollama_url}/api/generate",
+                          json={"model": model or cfg.model, "prompt": "",
+                                "keep_alive": getattr(cfg, "keep_alive", "30m")}, timeout=120)
+        except Exception:
+            pass
+    threading.Thread(target=go, daemon=True).start()
 
 
 def decide(cfg, goal: str, title: str, rendered_elements: str, history: list[str]) -> dict:
@@ -162,7 +178,8 @@ def decide(cfg, goal: str, title: str, rendered_elements: str, history: list[str
         ],
         "format": "json",
         "stream": False,
-        "options": {"temperature": cfg.temperature},
+        "keep_alive": getattr(cfg, "keep_alive", "30m"),
+        "options": {"temperature": cfg.temperature, "num_predict": 160},   # one action = ~30 tokens
     }
     try:
         r = requests.post(
