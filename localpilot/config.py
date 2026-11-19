@@ -25,6 +25,10 @@ class Config:
     use_memory: bool = True
     think_first: bool = True                      # the brain: understand, plan, answer, talk
     speak_replies: bool = True                    # say replies aloud (offline Windows voice)
+    tts_engine: str = "kokoro"                    # kokoro (natural) | piper (optional) | windows
+    tts_voice: str = "af_heart"                   # kokoro voice: af_heart, af_bella, af_nicole, bf_emma
+    whisper_model: str = "base.en"                # "small.en" = more accurate, ~3x slower
+    hold_event: object = None                     # set while the user is speaking: actions wait
     memory_path: str = ""                         # "" = %APPDATA%\LocalPilot\memory.json
     user_context: str = ""                        # filled per run from memory (not a user knob)
 

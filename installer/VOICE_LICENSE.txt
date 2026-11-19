@@ -1,0 +1,19 @@
+KokoroVoice (this folder) -- LocalPilot's natural-voice helper program
+
+This folder is a SEPARATE program from LocalPilot. LocalPilot starts it and exchanges plain
+text and audio with it over a pipe; it does not link to it.
+
+License: GNU General Public License v3.0 or later (https://www.gnu.org/licenses/gpl-3.0.html),
+because it includes:
+  - espeak-ng (GPL-3.0)          https://github.com/espeak-ng/espeak-ng
+  - phonemizer (GPL-3.0)         https://github.com/bootphon/phonemizer
+together with:
+  - kokoro-onnx (MIT)            https://github.com/thewh1teagle/kokoro-onnx
+  - Kokoro-82M model (Apache-2.0) https://huggingface.co/hexgrad/Kokoro-82M
+  - onnxruntime (MIT), numpy (BSD-3-Clause)
+
+Source code: the helper's own source is kokoro_worker.py in this folder. Sources of the
+components above are at the links shown. On request we will also provide the complete
+corresponding source for this folder's binaries for at least three years.
+
+You may remove this folder: LocalPilot then speaks with the built-in Windows voice instead.

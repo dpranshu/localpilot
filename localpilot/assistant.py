@@ -35,6 +35,12 @@ def handle(text: str, cfg, on_event=lambda kind, data: None, preferences: str = 
 
     n = len(plan["steps"])
     for i, step in enumerate(plan["steps"], 1):
+        hold = getattr(cfg, "hold_event", None)
+        if hold is not None and hold.is_set():           # the user is talking: wait for it
+            import time as _t
+            end = _t.time() + 10
+            while hold.is_set() and _t.time() < end and not cfg.stop_event.is_set():
+                _t.sleep(0.05)
         if cfg.stop_event is not None and cfg.stop_event.is_set():
             msg = "Okay, I stopped."
             on_event("done", {"text": msg, "ok": False}); return msg
@@ -50,6 +56,18 @@ def handle(text: str, cfg, on_event=lambda kind, data: None, preferences: str = 
             msg = f"{done_part}I couldn't {step[0].lower() + step[1:]}: {_why(final)}."
             on_event("say", {"text": msg}); on_event("done", {"text": msg, "ok": False})
             return msg
-    msg = "Done." if n == 1 else f"All done - {n} steps."
-    on_event("done", {"text": msg, "ok": True})
+    msg = _report(final, n)                    # say what was VERIFIED, not what was planned
+    on_event("say", {"text": msg}); on_event("done", {"text": msg, "ok": True})
     return msg
+
+
+def _report(final, n: int) -> str:
+    """'done: search results for 'x' are open' -> 'Done - search results for 'x' are open.'"""
+    detail = str(final)
+    if detail.lower().startswith("done:"):
+        detail = detail[5:].strip()
+    detail = detail.rstrip(". ")
+    prefix = "Done" if n == 1 else f"All {n} steps done"
+    if not detail or len(detail) > 160 or detail.lower().startswith(("dry-run", "{")):
+        return prefix + "."
+    return f"{prefix} - {detail[0].lower() + detail[1:]}."

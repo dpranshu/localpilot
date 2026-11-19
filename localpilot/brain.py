@@ -80,6 +80,11 @@ EXAMPLES = [
 def _direct(utterance: str) -> bool:
     """Already a concrete command one of the fast skills handles -> no need to think."""
     u = utterance.strip()
+    if re.search(r",\s*(?:and\s+)?then\b|\band then\b|;\s*\w|,\s*(?:and\s+)?(?:open|search|play|go)\b", u, re.I):
+        return False                                  # several things -> let the planner split it
+    p = web.parse(u)
+    if p and p.get("rest") and not web.wants_first_result(p["rest"]):
+        return False
     return bool(web.parse(u) or actions.settings_page_from_goal(u) or actions.folder_from_goal(u)
                 or actions.app_search_from_goal(u)
                 or (actions.app_from_goal(u) and (actions.is_only_open(u) or llm.math_expression(u)
@@ -111,6 +116,13 @@ def think(cfg, utterance: str, preferences: str = "", conversation: list | None 
     if local:
         return {"intent": "answer", "thought": "I can answer this exactly, no apps needed.",
                 "reply": local, "steps": [], "source": "local"}
+    # a how-to / knowledge question that isn't about the PC or live info: just answer it
+    # (the 7B planner otherwise sometimes "plans" physical steps like "Boil water")
+    if _QUESTION.match(u) and not _PC_VERB.search(u):
+        a = answer(cfg, u)
+        if a:
+            return {"intent": "answer", "thought": "A question I can answer - no apps needed.",
+                    "reply": a, "steps": [], "source": "answer"}
     if _direct(u):
         return {"intent": "do", "thought": "A clear command - doing it directly.",
                 "reply": "On it.", "steps": [u], "source": "direct"}
@@ -176,11 +188,18 @@ _PC_VERB = re.compile(r"\b(open|play|search|find|show|check|launch|start|set|tur
                       r"on (my|the) (pc|computer|screen)|weather|news|price|latest|today)\b", re.I)
 
 
+_DOABLE = re.compile(r"\s*(open|search|play|go to|type|write|save|close|click|launch|start|find|"
+                     r"show|google|look up|visit|watch|listen|switch|set|turn|check|create|new|"
+                     r"send|reply|download|install|scroll|press|copy|paste|select|delete|rename|move)\b", re.I)
+
+
 def _fix_steps(steps: list[str], reply: str, utterance: str = "") -> tuple[list[str], str]:
     """Make a plan executable on THIS PC: web versions for missing apps, merge Notepad lines,
     drop redundant steps."""
     from . import apps
     out, notes = [], []
+    # only steps a PC can do; "Boil water" / "Get a cup" are dropped
+    steps = [st for st in steps if _DOABLE.match(st or "")]
     steps = [re.sub(r"[\x00-\x1f]", "", s) for s in steps]          # JSON "\b" etc.
     for s in steps:
         # never add a save the user didn't ask for
@@ -208,6 +227,10 @@ def _fix_steps(steps: list[str], reply: str, utterance: str = "") -> tuple[list[
                 else:
                     notes.append(f"{name} isn't installed on this PC")
                     continue
+        # don't add "play" to a search the user only asked to SEARCH
+        if re.search(r"\s+and\s+play the first video\s*$", s, re.I) and utterance and \
+                not re.search(r"\b(play|listen|watch|put on|music|song|songs|video)\b", utterance, re.I):
+            s = re.sub(r"\s+and\s+play the first video\s*$", "", s, flags=re.I)
         nm = re.match(r"\s*open notepad and type:\s*(.+)$", s, re.I)
         if nm and out and re.match(r"\s*open notepad and type:", out[-1], re.I):
             out[-1] = out[-1].rstrip(" .") + "; " + nm.group(1).strip()   # one note, not three

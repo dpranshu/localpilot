@@ -575,3 +575,38 @@ you (typed, or 🎤 offline Windows speech) ─▶ brain.think ─▶ {intent, t
 
 Battery: 10 natural requests ("I'm bored", "is it going to rain in Mumbai", "find cheap headphones",
 "how do I make tea", "who wrote Harry Potter", …) passed 10/10. Together with the 31 earlier tasks: 41/41, 0 false claims.
+
+## Voice (v1.1.0): another way to talk to the same agent
+
+```
+mic ─▶ Silero VAD ─▶ Whisper (faster-whisper, local) ─┐
+keyboard ─────────────────────────────────────────────┴─▶ Session.submit(text, source)
+                                                            │ control: stop / wait / cancel → halt NOW
+                                                            │ inspect: "what's happening on my PC" → real state
+                                                            │ else: brain → answer | command (plan→act→verify)
+                                                            ▼
+                         spoken progress + verified result ─▶ TTS (Windows voice, or Piper add-on)
+```
+
+- **One session** (`session.py`) for typed and spoken turns: one conversation, one memory, one
+  running task. A spoken request can refer to something you typed, and the other way round.
+- **Control first**: "stop", "wait, don't change that file", "cancel", "hold on" are recognised
+  before anything else and halt speech *and* task. Every wait loop in the agent checks for stop.
+- **Hold while you talk**: the moment the voice detector hears you, LocalPilot stops speaking and holds
+  its next action. "Stop" cancels; anything else (or an unclear transcript) lets the task continue.
+  Without this, fast tasks finished their remaining steps before "wait…" had been transcribed.
+- **Inspect**: real facts (front window and its controls, open windows, CPU, memory, battery)
+  explained by the model, which is told to use only the facts.
+- **Verified reports**: the final sentence is the agent's checked result ("Done – search results for
+  'X' are open"), not the plan. Plans with several steps announce each step as it starts.
+- **Speech to text**: `base.en` int8 on the CPU, about 0.6 s per command (`small.en` is about 1.9 s and was no more
+  accurate in tests). Names are primed from *My context* and *typed* text only. Spoken transcripts
+  never teach Whisper, because a saved mishearing would otherwise be learned.
+- **Speech out**: Windows' built-in voices by default (licensed with Windows), synthesised to
+  memory and played by us, so they are interruptible. **Piper is GPL-3.0**, so it is an optional add-on
+  run as a separate process (`piper_worker.py`) and never bundled. Kokoro has the same espeak-ng issue.
+- **Modes**: 🎤 push-to-talk (stage 1), Hands-free with barge-in (stage 2). No wake word yet, by design.
+
+Voice battery (recorded speech in place of the mic; everything after it is real): voice command → act →
+verify → speak; "what's happening on my computer"; interruption mid-plan (later steps never ran);
+typed and spoken turns sharing one session: 4/4.

@@ -84,6 +84,9 @@ class App:
         self.cfg.log_callback = self.logq.put
         from .memory import Memory
         self.memory = Memory(self.cfg.memory_path or None)
+        from .session import Session
+        self.session = Session(self.cfg, self.memory, self._session_event)
+        self.voice = None                              # created on first use (loads models)
         self._hist_win = None
         self._hist_runs = []
         self.running = False
@@ -175,6 +178,13 @@ class App:
                                 relief="flat", buttonbackground="#1f1f29")
         self.steps.delete(0, "end"); self.steps.insert(0, str(self.cfg.max_steps))
         self.steps.grid(row=0, column=5, sticky="w", padx=6)
+        from .voice import KOKORO_VOICES
+        ttk.Label(sf, text="Voice").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self._voice_names = {v: k for k, v in KOKORO_VOICES.items()}
+        self.voice_pick = ttk.Combobox(sf, values=list(KOKORO_VOICES.values()), state="readonly", width=18)
+        self.voice_pick.set(KOKORO_VOICES.get(self.cfg.tts_voice, "Heart (US, warm)"))
+        self.voice_pick.grid(row=1, column=1, columnspan=2, sticky="w", padx=6, pady=(6, 0))
+        self.voice_pick.bind("<<ComboboxSelected>>", lambda e: self._voice_changed())
 
         # toggles
         tg = tk.Frame(self.root, bg=BG)
@@ -188,12 +198,15 @@ class App:
         self.v_mem = tk.BooleanVar(value=self.cfg.use_memory)
         self.v_think = tk.BooleanVar(value=self.cfg.think_first)
         self.v_speak = tk.BooleanVar(value=self.cfg.speak_replies)
+        self.v_handsfree = tk.BooleanVar(value=False)
         toggles = [("Think first", self.v_think), ("Speak replies", self.v_speak),
+                   ("Hands-free", self.v_handsfree),
                    ("Ask before risky actions", self.v_harness), ("Use my history", self.v_mem),
                    ("Confirm each step", self.v_confirm), ("Dry run", self.v_dry),
                    ("Agent cursor", self.v_cursor), ("Overlay", self.v_overlay),
                    ("Real cursor", self.v_real)]
         # grid, 4 per row: a single packed row overflowed and hid the last toggles
+        self.v_handsfree.trace_add("write", lambda *a: self.root.after(10, self._sync_handsfree))
         for i, (text, var) in enumerate(toggles):
             ttk.Checkbutton(tg, text=text, variable=var).grid(
                 row=i // 4, column=i % 4, sticky="w", padx=(0, 14), pady=1)
@@ -274,6 +287,8 @@ class App:
         self.cfg.use_memory = self.v_mem.get()
         self.cfg.think_first = self.v_think.get()
         self.cfg.speak_replies = self.v_speak.get()
+        if self.voice is not None:
+            self.voice.speak_enabled = self.cfg.speak_replies
 
     # ---------- history & personal context ----------
     def open_history(self):
@@ -360,13 +375,20 @@ class App:
 
     # ---------- actions ----------
     def on_run(self):
-        if self.running:
-            return
         goal = self.task_text()
         if not goal:
             self.set_status("Type a task first.", "err")
             return
         self._apply()
+        from . import settings as _settings
+        _settings.save_from(self.cfg)
+        if self.cfg.think_first:
+            # the session decides: "stop" works even mid-task; busy/idle comes from its events
+            self._clear_ph(); self.task.delete(0, "end")
+            self._ask(goal)
+            return
+        if self.running:
+            return
         from . import settings as _settings
         _settings.save_from(self.cfg)
         self.stop_event.clear()
@@ -377,9 +399,6 @@ class App:
         self._orb_state = "thinking"
         self.run_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
-        if self.cfg.think_first:
-            self._ask(goal)
-            return
         self.set_status("Running… focus your target window during the 3s countdown.", "run")
         self.append(f"\n=== RUN ({self.cfg.backend}): {goal} ===")
         self.root.iconify()   # get the panel out of the way so it isn't acted on
@@ -393,56 +412,81 @@ class App:
         threading.Thread(target=worker, daemon=True).start()
 
     def _ask(self, text):
-        """Brain mode: think -> say -> do the plan step by step -> report."""
-        from . import assistant
+        """Brain mode: the shared session decides (control / inspect / answer / command)."""
         self.set_status("Thinking…", "run")
-        self.logq.put({"event": "_you", "text": text})
-        if not hasattr(self, "_conversation"):
-            self._conversation = []
-        prefs = self.memory.preferences() if self.cfg.use_memory else ""
-        convo = list(self._conversation)
+        self.session.submit(text, "text")
 
-        def on_event(kind, data):
-            if kind == "plan":
-                self.logq.put({"event": "_plan", "plan": data})
-                if data.get("steps"):
-                    self.logq.put({"event": "_hide"})        # get out of the way of the PC
-            elif kind == "say":
-                self.logq.put({"event": "_say", "text": data["text"]})
-            elif kind == "step":
-                self.logq.put({"event": "_step", **data})
-            elif kind == "step_done":
-                self.logq.put({"event": "_step_done", **data})
+    def _session_event(self, kind, data):
+        """Session events (text AND voice turns) -> panel log + voice. Runs on worker threads."""
+        if self.voice is not None:
+            self.voice.on_session_event(kind, data)
+        if kind == "you":
+            self.logq.put({"event": "_you", "text": ("🎤 " if data.get("source") == "voice" else "")
+                           + data.get("text", "")})
+        elif kind == "plan":
+            self.logq.put({"event": "_plan", "plan": data})
+            if data.get("steps"):
+                self.logq.put({"event": "_hide"})          # get out of the way of the PC
+        elif kind == "say":
+            self.logq.put({"event": "_say", "text": data.get("text", "")})
+        elif kind in ("step", "step_done"):
+            self.logq.put({"event": "_" + kind, **data})
+        elif kind == "busy":
+            self.logq.put({"event": "_busy", "busy": data.get("busy")})
 
-        def worker():
-            try:
-                final = assistant.handle(text, self.cfg, on_event, prefs, convo)
-            except Exception as e:
-                final = UnfinishedRun(f"error: {e}")
-            self._conversation += [{"role": "user", "content": text},
-                                   {"role": "assistant", "content": str(final)}]
-            self._conversation = self._conversation[-12:]
-            self.logq.put({"event": "_final", "final": final, "quiet": True})
-        threading.Thread(target=worker, daemon=True).start()
+    def _voice_changed(self):
+        self.cfg.tts_voice = self._voice_names.get(self.voice_pick.get(), "af_heart")
+        from . import settings as _settings
+        _settings.save_from(self.cfg)
+        if self.voice is not None:                     # switch now, and say hello in the new voice
+            from .voice import Speaker
+            self.voice.speaker.stop()
+            self.voice.speaker = Speaker(self.cfg.tts_engine, self.cfg.tts_voice)
+        else:
+            self._ensure_voice()
+        self.voice.speaker.say("Hi, this is my new voice.")
+
+    def _ensure_voice(self) -> bool:
+        if self.voice is None and self.cfg.tts_engine == "kokoro":
+            from . import voice as _v
+            if not _v.available().get("kokoro_voice"):
+                # first use: fetch the natural voice in the background; Zira speaks meanwhile
+                threading.Thread(target=lambda: _v.ensure_kokoro(
+                    lambda m: self.logq.put({"event": "_setup", "message": m})), daemon=True).start()
+        if self.voice is None:
+            from . import voice
+            self.voice = voice.Voice(self.session, speak=self.cfg.speak_replies,
+                                     log=lambda m: self.logq.put({"event": "_note", "text": m}),
+                                     engine=self.cfg.tts_engine, voice=self.cfg.tts_voice)
+            self.voice.whisper_model = self.cfg.whisper_model
+        return True
 
     def on_mic(self):
-        """Listen for one spoken request (offline Windows speech), then ask it."""
-        if self.running:
-            return
-        from . import voice
-        self.mic_btn.config(state="disabled")
-        self.set_status("Listening… speak now.", "run")
+        """Push to talk: listen for one request (Silero VAD + Whisper, all local)."""
+        self._ensure_voice()
+        if self.voice.listener is not None and self.voice.mode == "push":
+            self.voice.stop_listening(); self.set_status("Stopped listening.", "info"); return
+        err = self.voice.start_listening("push")
+        self.set_status(err or "Listening… speak now (I'll stop when you pause).", "err" if err else "run")
 
-        def work():
-            heard = voice.listen()
-            self.logq.put({"event": "_heard", "text": heard})
-        threading.Thread(target=work, daemon=True).start()
+    def _sync_handsfree(self):
+        on = self.v_handsfree.get()
+        if on:
+            self._ensure_voice()
+            if self.voice.mode != "hands-free":
+                self.voice.stop_listening()
+                err = self.voice.start_listening("hands-free")
+                self.set_status(err or "Hands-free: I'm listening. Say \"stop\" anytime.",
+                                "err" if err else "ok")
+                if err:
+                    self.v_handsfree.set(False)
+        elif self.voice is not None and self.voice.mode == "hands-free":
+            self.voice.stop_listening(); self.set_status("Hands-free off.", "info")
 
     def on_stop(self):
-        if not self.running:
-            return
+        self.session.interrupt("stop")                  # speech AND task, immediately
         self.stop_event.set()
-        self.set_status("Stopping after this step…", "info")
+        self.set_status("Stopping…", "info")
 
     def on_check(self):
         self._apply()
@@ -510,6 +554,11 @@ class App:
             pass
         self.stop_event.set()
         try:
+            if self.voice is not None:
+                self.voice.stop_listening(); self.voice.speaker.stop()
+        except Exception:
+            pass
+        try:
             self.root.destroy()
         except Exception:
             pass
@@ -519,25 +568,35 @@ class App:
             while True:
                 rec = self.logq.get_nowait()
                 e = rec.get("event")
-                if e == "_heard":
-                    self.mic_btn.config(state="normal")
-                    if rec["text"]:
-                        self._clear_ph(); self.task.delete(0, "end"); self.task.insert(0, rec["text"])
-                        self.on_run()
+                if e == "_busy":
+                    if rec["busy"]:
+                        self.running = True
+                        self.run_btn.config(state="disabled"); self.stop_btn.config(state="normal")
                     else:
-                        self.set_status("I didn't catch that (check the microphone).", "err")
+                        self.running = False
+                        self.run_btn.config(state="normal"); self.stop_btn.config(state="disabled")
+                        self._orb_state = "done"
+                        self._orb_idle_timer = self.root.after(2600, self._idle_orb)
+                        self.refresh_history()
+                        try:
+                            self.root.deiconify()
+                        except Exception:
+                            pass
                     continue
+                if e == "_note":
+                    self.append("  " + rec["text"])
+                    if rec["text"].startswith("(heard)") and self.voice is not None \
+                            and self.voice.mode == "push":
+                        self.set_status("Got it.", "ok")
+                    continue
+                if e == "_say":
+                    self.set_status(rec["text"], "ok")
                 if e == "_hide":
                     try:
                         self.root.iconify()
                     except Exception:
                         pass
                     continue
-                if e == "_say" and self.cfg.speak_replies:
-                    from . import voice
-                    if not voice.speak(rec["text"]) and not getattr(self, "_voice_warned", False):
-                        self._voice_warned = True
-                        self.append("  (voice: no working audio output on this PC -- replies are shown here)")
                 if e == "_setup":
                     self.set_status(rec["message"], "info")
                     continue

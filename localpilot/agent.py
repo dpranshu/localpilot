@@ -54,6 +54,12 @@ class _RunStopped(Exception):
 
 
 def _check_stop(cfg):
+    hold = getattr(cfg, "hold_event", None)
+    if hold is not None and hold.is_set():
+        # the user started talking: don't act until we know what they said (max 10 s)
+        end = time.time() + 10
+        while hold.is_set() and time.time() < end and not cfg.stop_event.is_set():
+            time.sleep(0.05)
     if cfg.stop_event.is_set():
         raise _RunStopped("stopped by user")
     if _key_down(cfg.kill_key_vk):
@@ -173,6 +179,8 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
 
     if cfg.stop_event is None:
         cfg = replace(cfg, stop_event=Event())
+    global _STOP
+    _STOP = cfg.stop_event
 
     if cfg.backend == "vision":
         from .vision import run_vision
@@ -410,7 +418,7 @@ def _run_impl(goal: str, cfg: Config | None = None) -> str:
                 if app_search:
                     # In-app search (Settings, File Explorer, Store ...): the app's OWN search box.
                     q = app_search[2]
-                    if _app_search(q, logger, step, cfg):
+                    if _app_search(q, logger, step, cfg, app_search[0]):
                         final = f"done: searched {auto_app} for '{q}'"
                         logger.log({"event": "goal_check", "step": step, "done": True,
                                     "why": "the search words are in the app's search box/results"})
@@ -712,10 +720,19 @@ def _site_word(url: str) -> str:
     return parts[0] if parts else host
 
 
+_STOP = None          # the running task's stop event: every wait below bails out on it
+
+
+def _stopping() -> bool:
+    return _STOP is not None and _STOP.is_set()
+
+
 def _wait_title_has(word: str, cfg, timeout: float = 10.0) -> bool:
     import ctypes
     end = time.time() + timeout
     while time.time() < end:
+        if _stopping():
+            return False
         if word and word in _win_title(ctypes.windll.user32.GetForegroundWindow()).lower():
             return True
         time.sleep(0.15)
@@ -726,6 +743,8 @@ def _wait_ui_ready(cfg, timeout: float = 4.0, poll: float = 0.2):
     """Wait until the front window's controls stop appearing (app finished loading)."""
     end, last, same = time.time() + timeout, -1, 0
     while time.time() < end:
+        if _stopping():
+            return False
         try:
             n = len(perceive(cfg)[1])
         except Exception:
@@ -748,6 +767,8 @@ def _fg_now():
 def _wait_title(pred, timeout: float = 10.0) -> bool:
     end = time.time() + timeout
     while time.time() < end:
+        if _stopping():
+            return False
         if pred(_win_title(ctypes.windll.user32.GetForegroundWindow())):
             return True
         time.sleep(0.15)
@@ -759,6 +780,8 @@ def _wait_results(query: str, timeout: float = 10.0, hwnd=None) -> bool:
     query: in its title, or in its URL (checked about once a second)."""
     end, n, fixed = time.time() + timeout, 0, hwnd
     while time.time() < end:
+        if _stopping():
+            return False
         fg = ctypes.windll.user32.GetForegroundWindow()
         if fixed and fg != fixed and web.query_in_title(query, _win_title(fg)):
             fixed = fg                        # results came up in another (new) window
@@ -773,12 +796,24 @@ def _wait_results(query: str, timeout: float = 10.0, hwnd=None) -> bool:
     return False
 
 
-def _app_search(query: str, logger, step, cfg) -> bool:
-    """Search inside a desktop app with its OWN search box: select all, type once, Enter once."""
+def _app_search(query: str, logger, step, cfg, app: str = "") -> bool:
+    """Search inside a desktop app with its OWN search box: select all, type once, Enter once.
+    The app must be in FRONT first (it can open behind another window); never type elsewhere."""
     try:
         import uiautomation as auto
-        win = auto.ControlFromHandle(ctypes.windll.user32.GetForegroundWindow())
-        box = web.find_search_box(win)
+        box, end = None, time.time() + 4
+        while box is None and time.time() < end and not _stopping():
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if app and not _title_matches(_win_title(hwnd), app):
+                cand = _launched_window(app, None)
+                if cand:
+                    _activate(cand); time.sleep(0.3)
+                    hwnd = ctypes.windll.user32.GetForegroundWindow()
+                if not _title_matches(_win_title(hwnd), app):
+                    time.sleep(0.3); continue
+            box = web.find_search_box(auto.ControlFromHandle(hwnd))
+            if box is None:
+                time.sleep(0.3)                     # the search box can appear a moment later
         if box is None:
             logger.log({"event": "app_search", "step": step, "found_box": False})
             return False
@@ -885,6 +920,8 @@ def _wait_for_app(app: str, windows_before, cfg, timeout: float = 10.0) -> bool:
     rules), bring it to the front ourselves -- never act on the window that was in front."""
     end, start = time.time() + timeout, time.time()
     while time.time() < end:
+        if _stopping():
+            return False
         hwnd = ctypes.windll.user32.GetForegroundWindow()
         title = _win_title(hwnd)
         if (windows_before is not None and hwnd not in windows_before and title) or                 _title_matches(title, app):
