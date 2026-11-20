@@ -51,6 +51,12 @@ class Session:
         self.memory = memory
         self.on_event = on_event
         self.conversation: list[dict] = []          # shared by text AND voice
+        if memory is not None and getattr(cfg, "use_memory", True):
+            try:                                    # the conversation continues across restarts
+                self.conversation = memory.conversation()
+            except Exception:
+                self.conversation = []
+        self._summarizing = False
         self._worker: threading.Thread | None = None
         self._task = ""
         self._lock = threading.Lock()
@@ -153,7 +159,31 @@ class Session:
         reply = ""
         try:
             from .research import router as _router
-            if getattr(self.cfg, "see_enabled", True) and (see.image_path_in(text) or see.wants_screen(text)):
+            from . import profile as _profile
+            mem = self.memory if (self.memory and getattr(self.cfg, "use_memory", True)) else None
+            personal = _profile.explicit(text, mem) if mem else None
+            learned = []
+            if mem and personal is None:
+                for key, fact in _profile.learn(text):          # quietly learn what the user says
+                    if mem.add_fact(fact, source, key):
+                        learned.append(fact)
+                        self._emit("learned", {"fact": fact})
+            if personal is None and learned and _profile.is_statement(text):
+                # the user just told us about themselves: talk, never act on it
+                from . import brain as _brain
+                reply = _brain.answer(self.cfg, text, self.personal_context(text), list(self.conversation),
+                                      acknowledge=True) or "Got it, I'll remember that."
+                self._emit("plan", {"intent": "chat", "thought": "You told me about yourself - remembered.",
+                                    "reply": reply, "steps": []})
+                self._emit("say", {"text": reply})
+                self._emit("done", {"text": reply, "ok": True})
+            elif personal is not None:
+                reply = personal
+                self._emit("plan", {"intent": "chat", "thought": "About you - from my memory on this PC.",
+                                    "reply": reply, "steps": []})
+                self._emit("say", {"text": reply})
+                self._emit("done", {"text": reply, "ok": True})
+            elif getattr(self.cfg, "see_enabled", True) and (see.image_path_in(text) or see.wants_screen(text)):
                 self._emit("plan", {"intent": "see", "thought": "Looking at it - on this PC only.",
                                     "reply": "", "steps": []})
                 reply = see.explain(self.cfg, text)
@@ -168,7 +198,7 @@ class Session:
             elif getattr(self.cfg, "research_enabled", True) and _router.wants_research(text):
                 reply = self._research(text, _router.mode_for(text, getattr(self.cfg, "research_mode", "quick")))
             else:
-                prefs = self.memory.preferences() if (self.memory and self.cfg.use_memory) else ""
+                prefs = self.personal_context(text)
                 research = (lambda t: self._research(t, _router.mode_for(t, getattr(self.cfg, "research_mode", "quick"))))                     if getattr(self.cfg, "research_enabled", True) else None
                 reply = assistant.handle(text, self.cfg, self._relay, prefs, list(self.conversation),
                                          research=research)
@@ -208,12 +238,22 @@ class Session:
         else:
             self._emit("say", {"text": result.spoken})
         self._emit("done", {"text": result.answer, "ok": result.ok})
+        # what goes into the conversation includes the pages actually read, so follow-ups
+        # ("which site was that from?") are answered from facts, not guessed
+        if result.evidence:
+            return result.answer + "\n\nSources I read: " + "; ".join(
+                f"[{e.n}] {e.title[:70]} - {e.url}" for e in result.evidence[:8])
         return result.answer
 
     def shutdown(self):
         b = getattr(self, "_browser", None)
         if b is not None:
             b.shutdown()
+        try:                                          # detach from personal browsers (they stay open)
+            from .agent_browser import personal_task
+            personal_task.shutdown()
+        except Exception:
+            pass
 
     def _relay(self, kind, data):
         if kind == "step" and data.get("n", 1) > 1:     # streaming progress for longer plans
@@ -221,7 +261,53 @@ class Session:
         if kind != "thinking":
             self._emit(kind, data)
 
+    def personal_context(self, query: str = "") -> str:
+        """What the brain should know about the user + the gist of older conversation."""
+        if not (self.memory and getattr(self.cfg, "use_memory", True)):
+            return ""
+        try:
+            parts = [self.memory.profile(query)]
+            s = self.memory.summary()
+            if s:
+                parts.append("Earlier conversation (summary):\n" + s)
+            return "\n\n".join(p for p in parts if p)
+        except Exception:
+            return ""
+
     def _remember(self, user, reply, source="text"):
-        self.conversation += [{"role": "user", "content": user, "source": source},
-                              {"role": "assistant", "content": str(reply)}]
-        self.conversation = self.conversation[-16:]
+        import time as _time
+        now = _time.strftime("%Y-%m-%d %H:%M")
+        self.conversation += [{"role": "user", "content": user, "source": source, "ts": now},
+                              {"role": "assistant", "content": str(reply), "ts": now}]
+        keep = getattr(self.cfg, "conversation_keep", 40)
+        if self.memory and getattr(self.cfg, "use_memory", True):
+            if len(self.conversation) > keep and not self._summarizing:
+                old, self.conversation = self.conversation[:-keep // 2], self.conversation[-keep // 2:]
+                self._summarizing = True
+                threading.Thread(target=self._fold_into_summary, args=(old,), daemon=True,
+                                 name="LocalPilot-Summary").start()
+            try:
+                self.memory.save_conversation(self.conversation)
+            except Exception:
+                pass
+        else:
+            self.conversation = self.conversation[-keep:]
+
+    def _fold_into_summary(self, old: list[dict]):
+        """Older turns become a rolling summary (kept in memory.json), so long conversations
+        keep their thread without overflowing the model's context."""
+        try:
+            from .research.qwen import chat
+            prev = self.memory.summary()
+            convo = "\n".join(f"{t['role']}: {str(t['content'])[:600]}" for t in old)
+            s = chat(self.cfg,
+                     "Update a running summary of a conversation between a user and their personal assistant. "
+                     "Keep facts about the user, decisions, open tasks, topics researched and their conclusions. "
+                     "At most 12 short lines. Plain text, English.",
+                     f"Current summary:\n{prev or '(none)'}\n\nNew turns:\n{convo}", max_tokens=400)
+            if s and s.strip():
+                self.memory.set_summary(s.strip())
+        except Exception:
+            pass
+        finally:
+            self._summarizing = False

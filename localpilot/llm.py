@@ -195,7 +195,7 @@ def check_goal(cfg, goal: str, title: str, rendered_elements: str) -> tuple[bool
                "messages": [{"role": "system", "content": CHECK_PROMPT},
                             {"role": "user", "content": user}],
                "keep_alive": getattr(cfg, "keep_alive", "30m"),
-               "options": {"temperature": 0.0, "num_predict": 80}}
+               "options": {"temperature": 0.0, "num_predict": 80, "num_ctx": getattr(cfg, "num_ctx", 8192)}}
     try:
         r = requests.post(f"{cfg.ollama_url}/api/chat", json=payload, timeout=cfg.request_timeout)
         r.raise_for_status()
@@ -215,7 +215,8 @@ def warm(cfg, model: str | None = None) -> None:
         try:
             requests.post(f"{cfg.ollama_url}/api/generate",
                           json={"model": model or cfg.model, "prompt": "",
-                                "keep_alive": getattr(cfg, "keep_alive", "30m")}, timeout=120)
+                                "keep_alive": getattr(cfg, "keep_alive", "30m"),
+                                "options": {"num_ctx": getattr(cfg, "num_ctx", 8192)}}, timeout=120)
         except Exception:
             pass
     threading.Thread(target=go, daemon=True).start()
@@ -233,7 +234,7 @@ def decide(cfg, goal: str, title: str, rendered_elements: str, history: list[str
         "format": "json",
         "stream": False,
         "keep_alive": getattr(cfg, "keep_alive", "30m"),
-        "options": {"temperature": cfg.temperature, "num_predict": 160},   # one action = ~30 tokens
+        "options": {"temperature": cfg.temperature, "num_predict": 160, "num_ctx": getattr(cfg, "num_ctx", 8192)},   # one action = ~30 tokens
     }
     try:
         r = requests.post(

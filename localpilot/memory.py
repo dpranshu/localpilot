@@ -24,6 +24,9 @@ import uuid
 DEFAULT_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
                             "LocalPilot", "memory.json")
 MAX_RUNS = 300
+MAX_FACTS = 200
+MAX_TURNS = 80
+_SECRETISH = re.compile(r"\b(password|passcode|pin|otp|cvv|card number|api key|token|secret)\b", re.I)
 _STOP = set("a an the to and or of in on at for with my me please then into from is it this that "
             "open go click type".split())
 _WORD = re.compile(r"[a-z0-9]+")
@@ -69,6 +72,9 @@ class Memory:
         data.setdefault("version", 1)
         data.setdefault("preferences", "")
         data.setdefault("runs", [])
+        data.setdefault("facts", [])               # what LocalPilot has learned about the user
+        data.setdefault("conversation", [])        # recent turns, kept across restarts
+        data.setdefault("summary", "")             # rolling summary of older conversation
         return data
 
     def _save(self, data: dict):
@@ -123,6 +129,94 @@ class Memory:
             data = self._load()
             data["preferences"] = (text or "").strip()[:2000]
             self._save(data)
+
+    # ---------------- personal facts ----------------
+    def facts(self) -> list[dict]:
+        with _lock:
+            return list(self._load()["facts"])
+
+    def add_fact(self, text: str, source: str = "said", key: str = "") -> dict | None:
+        """Store one fact about the user. A fact with the same `key` (e.g. "name") replaces the old
+        one; an identical fact is not duplicated. Secrets are never stored."""
+        text = redact((text or "").strip())[:300]
+        if not text or _SECRETISH.search(text):
+            return None
+        with _lock:
+            data = self._load()
+            facts = data["facts"]
+            if key:
+                facts = [f for f in facts if f.get("key") != key]
+            norm = text.lower().rstrip(".")
+            facts = [f for f in facts if f["text"].lower().rstrip(".") != norm]
+            fact = {"id": uuid.uuid4().hex[:8], "text": text, "key": key, "source": source,
+                    "ts": time.strftime("%Y-%m-%d %H:%M")}
+            facts.append(fact)
+            data["facts"] = facts[-MAX_FACTS:]
+            self._save(data)
+        return fact
+
+    def forget(self, what: str) -> list[str]:
+        """Remove facts matching `what` (words or the fact's key). Returns the removed texts."""
+        q = _tokens(what)
+        with _lock:
+            data = self._load()
+            keep, gone = [], []
+            for f in data["facts"]:
+                t = _tokens(f["text"])
+                hit = (f.get("key") and f["key"] in q) or (q and len(q & t) / len(q) >= 0.6)
+                (gone if hit else keep).append(f)
+            data["facts"] = keep
+            self._save(data)
+        return [f["text"] for f in gone]
+
+    def forget_all(self):
+        with _lock:
+            data = self._load()
+            data["facts"], data["conversation"], data["summary"] = [], [], ""
+            self._save(data)
+
+    def fact(self, key: str) -> str:
+        return next((f["text"] for f in reversed(self.facts()) if f.get("key") == key), "")
+
+    # ---------------- conversation (survives restarts) ----------------
+    def conversation(self) -> list[dict]:
+        with _lock:
+            return list(self._load()["conversation"])
+
+    def save_conversation(self, turns: list[dict]):
+        with _lock:
+            data = self._load()
+            data["conversation"] = [{"role": t["role"], "content": redact(str(t["content"]))[:4000],
+                                     "ts": t.get("ts", time.strftime("%Y-%m-%d %H:%M"))}
+                                    for t in turns][-MAX_TURNS:]
+            self._save(data)
+
+    def summary(self) -> str:
+        with _lock:
+            return self._load()["summary"]
+
+    def set_summary(self, text: str):
+        with _lock:
+            data = self._load()
+            data["summary"] = (text or "").strip()[:3000]
+            self._save(data)
+
+    def profile(self, query: str = "", k: int = 30) -> str:
+        """The 'about the user' block for the brain: their notes + the facts most relevant to
+        `query` (all of them while there are few)."""
+        parts = []
+        prefs = self.preferences()
+        if prefs:
+            parts.append(prefs)
+        facts = self.facts()
+        if len(facts) > k and query:
+            q = _tokens(query)
+            pinned = [f for f in facts if f.get("key") in ("name", "location", "job")]
+            scored = sorted((f for f in facts if f not in pinned),
+                            key=lambda f: -len(q & _tokens(f["text"])))
+            facts = pinned + scored[:k - len(pinned)]
+        parts += [f"- {f['text']}" for f in facts[-k:]]
+        return "\n".join(parts)
 
     # ---------------- recall ----------------
     def relevant(self, goal: str, k: int = 3, min_score: float = 0.34) -> list[dict]:

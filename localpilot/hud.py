@@ -357,6 +357,8 @@ class HudOverlay:
         self.f_small = _font(12, bold=True)
 
     def _teardown(self):
+        if self._ok:
+            HudOverlay.active = max(0, HudOverlay.active - 1)
         for w in (getattr(self, "_orb", None), getattr(self, "_main", None)):
             if w is not None:
                 w.destroy()
@@ -452,10 +454,13 @@ class HudOverlay:
         threading.Thread(target=go, daemon=True).start()
 
     # ---------------- main loop ----------------
+    active = 0          # HUD orbs on screen now (the presence orb hides while one is)
+
     def _run(self):
         try:
             self._setup()
             self._ok = True
+            HudOverlay.active += 1
         except Exception:
             self._ok = False
             self._ready.set()

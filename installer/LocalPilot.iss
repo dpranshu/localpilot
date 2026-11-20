@@ -29,7 +29,7 @@ CloseApplications=yes
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
-Name: "autostart"; Description: "Start LocalPilot in the system &tray when I sign in"; GroupDescription: "Startup:"; Flags: unchecked
+Name: "autostart"; Description: "Start LocalPilot in the &background when I sign in (the orb shows it is running)"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
 Source: "..\dist\LocalPilot\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -37,12 +37,12 @@ Source: "EULA.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\LocalPilot.exe"
-Name: "{group}\{#AppName} (tray)"; Filename: "{app}\LocalPilot.exe"; Parameters: "--tray"
+Name: "{group}\{#AppName} (background)"; Filename: "{app}\LocalPilot.exe"; Parameters: "--background"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\LocalPilot.exe"; Tasks: desktopicon
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LocalPilot"; ValueData: """{app}\LocalPilot.exe"" --tray"; Tasks: autostart; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LocalPilot"; ValueData: """{app}\LocalPilot.exe"" --background"; Tasks: autostart; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\LocalPilot.exe"; Description: "Launch LocalPilot (it will help you set up the AI engine)"; Flags: nowait postinstall skipifsilent

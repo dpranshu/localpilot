@@ -10,7 +10,7 @@ import requests
 def chat(cfg, system: str, user: str, as_json: bool = False, max_tokens: int = 500,
          temperature: float = 0.2, timeout: float | None = None) -> str:
     body = {"model": cfg.model, "stream": False, "keep_alive": getattr(cfg, "keep_alive", "30m"),
-            "options": {"temperature": temperature, "num_predict": max_tokens, "num_ctx": 8192},
+            "options": {"temperature": temperature, "num_predict": max_tokens, "num_ctx": getattr(cfg, "num_ctx", 8192)},
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
     if as_json:
         body["format"] = "json"

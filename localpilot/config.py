@@ -11,6 +11,8 @@ class Config:
     temperature: float = 0.1
     request_timeout: int = 120                    # seconds per model call
     keep_alive: str = "30m"                       # keep the model in memory between tasks
+    num_ctx: int = 8192                           # ONE context size for every Qwen call (a change reloads the model)
+    conversation_keep: int = 40                   # turns kept verbatim; older ones are summarized
 
     def __post_init__(self):
         self.ollama_url = (self.ollama_url or "").replace("://localhost", "://127.0.0.1")

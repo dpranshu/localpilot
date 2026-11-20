@@ -12,6 +12,7 @@ window the agent acts on (focus your target during the 3s countdown).
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 import time
 import tkinter as tk
@@ -238,8 +239,11 @@ class App:
         self._quit_btn.pack(side="right")
         lf.pack(fill="both", expand=True, padx=10, pady=8)
 
-        self.root.protocol("WM_DELETE_WINDOW", self.on_quit)
+        # closing the window keeps LocalPilot running in the background (the orb stays);
+        # Quit (button, orb menu) really exits
+        self.root.protocol("WM_DELETE_WINDOW", self.to_background)
         self.root.bind("<Escape>", lambda e: self.on_stop())
+        self._start_presence()
         self.root.after(120, self._drain)
         self.root.after(500, self.on_check)     # first-run / startup health check
 
@@ -663,6 +667,11 @@ class App:
         except Exception:
             pass
         try:
+            if getattr(self, "presence", None) is not None:
+                self.presence.close()
+        except Exception:
+            pass
+        try:
             self.root.destroy()
         except Exception:
             pass
@@ -766,12 +775,94 @@ class App:
         except Exception:
             pass
 
-    def run(self):
+    # ---------- presence: the always-visible orb + background mode ----------
+    def _start_presence(self):
+        self.presence = None
+        self._brain_ok = True
+        self._told_background = False
+        try:
+            from .presence import PresenceOrb
+            self.presence = PresenceOrb(
+                on_open=lambda: self.root.after(0, self.show_window),
+                on_pause=lambda: self.session.hold(),
+                on_resume=lambda: self.session.resume(),
+                on_stop=lambda: self.session.interrupt("stop"),
+                on_quit=lambda: self.root.after(0, self.on_quit)).start()
+        except Exception as e:
+            print("presence orb unavailable:", e)
+        threading.Thread(target=self._watch_brain, daemon=True, name="LocalPilot-BrainPing").start()
+        self.root.after(200, self._sync_presence)
+
+    def _watch_brain(self):
+        """Is Qwen (Ollama) reachable? If not, the orb shows LocalPilot as not active (dimmed)."""
+        import requests as _rq
+        while True:
+            try:
+                _rq.get(f"{self.cfg.ollama_url}/api/tags", timeout=3).raise_for_status()
+                self._brain_ok = True
+            except Exception:
+                self._brain_ok = False
+            time.sleep(20)
+
+    def presence_state(self) -> tuple[str, bool, bool]:
+        """(orb state, busy, paused) from what LocalPilot is really doing."""
+        s = self.session
+        busy, paused = bool(s.busy), bool(s.paused)
+        b = getattr(s, "_browser", None)
+        browsing = bool(b is not None and b.busy)
+        if busy or self.running:
+            state = "acting" if (browsing or self._orb_state == "acting") else "thinking"
+        elif not self._brain_ok:
+            state = "stopped"
+        else:
+            state = self._orb_state if self._orb_state in ("done", "stopped") else "idle"
+        return state, busy or self.running, paused
+
+    def _sync_presence(self):
+        if self.presence is not None:
+            try:
+                self.presence.set_state(*self.presence_state())
+            except Exception:
+                pass
+        self.root.after(200, self._sync_presence)
+
+    def show_window(self):
+        if self.presence is not None:
+            self.presence.show()
+        self.root.deiconify()
+        self.root.lift()
+        try:
+            self.root.focus_force()
+        except Exception:
+            pass
+
+    def to_background(self):
+        """Hide the window; LocalPilot keeps running (voice, tasks, research) with the orb visible."""
+        try:
+            self._apply()
+            from . import settings as _settings
+            _settings.save_from(self.cfg)
+        except Exception:
+            pass
+        self.root.withdraw()
+        if not self._told_background:
+            self._told_background = True
+            self.logq.put({"event": "_setup", "message": "LocalPilot is still running in the background - "
+                           "click the orb to open it, right-click it to quit."})
+
+    def run(self, background: bool = False):
+        if background:
+            self.root.withdraw()
         self.root.mainloop()
 
 
-def main():
-    App().run()
+def main(background: bool = False):
+    from . import instance
+    if not instance.claim(background):           # already running: it was asked to show itself
+        return
+    app = App()
+    instance.on_show(lambda: app.root.after(0, app.show_window))
+    app.run(background=background or "--background" in sys.argv[1:])
 
 
 if __name__ == "__main__":

@@ -61,7 +61,9 @@ Each step must be ONE of these forms (they are executed by reliable skills -- us
   anything else: a short, literal instruction ("Open Outlook and start a new email")
 Use 1-4 steps. Never invent steps the user didn't ask for. Never do anything risky (buying,
 sending, deleting, posting, passwords) unless the user clearly asked -- and even then the PC will
-ask them to confirm. Use the user's preferences below (their browser, music taste, apps).
+ask them to confirm. You KNOW this user: use what you remember about them below (name, work,
+tastes, earlier conversation) naturally -- use their name now and then, keep the thread of the
+conversation, never ask for something they already told you.
 Output JSON only."""
 
 EXAMPLES = [
@@ -123,7 +125,7 @@ def think(cfg, utterance: str, preferences: str = "", conversation: list | None 
     # a how-to / knowledge question that isn't about the PC or live info: just answer it
     # (the 7B planner otherwise sometimes "plans" physical steps like "Boil water")
     if _QUESTION.match(u) and not _PC_VERB.search(u):
-        a = answer(cfg, u)
+        a = answer(cfg, u, preferences, conversation)
         if a:
             return {"intent": "answer", "thought": "A question I can answer - no apps needed.",
                     "reply": a, "steps": [], "source": "answer"}
@@ -133,11 +135,11 @@ def think(cfg, utterance: str, preferences: str = "", conversation: list | None 
 
     now = _dt.datetime.now().strftime("%A %d %B %Y, %I:%M %p")
     msgs = [{"role": "system", "content": BRAIN_PROMPT +
-             f"\n\nNow: {now}.\nUser preferences:\n{(preferences or '(none yet)').strip()[:800]}"}]
+             f"\n\nNow: {now}.\nWhat you remember about the user:\n{(preferences or '(nothing yet)').strip()[:3000]}"}]
     for q, a in EXAMPLES:
         msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": json.dumps(a)}]
-    for turn in (conversation or [])[-6:]:
-        msgs.append({"role": turn["role"], "content": turn["content"][:500]})
+    for turn in (conversation or [])[-12:]:
+        msgs.append({"role": turn["role"], "content": str(turn["content"])[:1200]})
     msgs.append({"role": "user", "content": u})
     plan, err = None, ""
     for attempt in range(2):                 # the engine may still be loading the model
@@ -145,7 +147,7 @@ def think(cfg, utterance: str, preferences: str = "", conversation: list | None 
             r = requests.post(f"{cfg.ollama_url}/api/chat", timeout=cfg.request_timeout, json={
                 "model": cfg.model, "messages": msgs, "format": "json", "stream": False,
                 "keep_alive": getattr(cfg, "keep_alive", "30m"),
-                "options": {"temperature": 0.3, "num_predict": 300}})
+                "options": {"temperature": 0.3, "num_predict": 300, "num_ctx": getattr(cfg, "num_ctx", 8192)}})
             r.raise_for_status()
             plan = llm._extract_json(r.json().get("message", {}).get("content", ""))
             break
@@ -158,20 +160,33 @@ def think(cfg, utterance: str, preferences: str = "", conversation: list | None 
                 "reply": "Let me try that.", "steps": [u], "source": "fallback"}
     out = _clean(plan, u)
     if out.pop("needs_answer", False):
-        out["reply"] = answer(cfg, u) or out["reply"]
+        out["reply"] = answer(cfg, u, preferences, conversation) or out["reply"]
     return out
 
 
-def answer(cfg, question: str) -> str:
-    """A proper spoken-style answer to a question (plain text, a few sentences)."""
+def answer(cfg, question: str, preferences: str = "", conversation: list | None = None,
+           acknowledge: bool = False) -> str:
+    """A proper spoken-style answer to a question (plain text, a few sentences), personal:
+    it knows what LocalPilot remembers about the user and the recent conversation."""
+    system = ("You are LocalPilot, the user's own personal assistant on their PC (like JARVIS). Answer "
+              "clearly and concisely in plain text (no markdown, no lists), at most 4 short sentences, as "
+              "if speaking aloud. Use what you remember about the user when it helps; never invent facts "
+              "about them.")
+    if acknowledge:
+        system += (" The user is telling you something about themselves. Acknowledge it warmly in ONE "
+                   "short sentence and show you'll remember it. Do NOT offer to do or play anything and "
+                   "do not claim to have done anything.")
+    if preferences:
+        system += f"\n\nWhat you remember about the user:\n{preferences.strip()[:3000]}"
+    msgs = [{"role": "system", "content": system}]
+    for turn in (conversation or [])[-8:]:
+        msgs.append({"role": turn["role"], "content": str(turn["content"])[:1000]})
+    msgs.append({"role": "user", "content": question})
     try:
         r = requests.post(f"{cfg.ollama_url}/api/chat", timeout=cfg.request_timeout, json={
             "model": cfg.model, "stream": False, "keep_alive": getattr(cfg, "keep_alive", "30m"),
-            "options": {"temperature": 0.3, "num_predict": 220},
-            "messages": [{"role": "system", "content": "You are a helpful assistant. Answer clearly "
-                          "and concisely in plain text (no markdown, no lists), at most 4 short "
-                          "sentences, as if speaking aloud."},
-                         {"role": "user", "content": question}]})
+            "options": {"temperature": 0.3, "num_predict": 220, "num_ctx": getattr(cfg, "num_ctx", 8192)},
+            "messages": msgs})
         r.raise_for_status()
         return r.json().get("message", {}).get("content", "").strip()[:700]
     except Exception:

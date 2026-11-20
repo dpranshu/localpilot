@@ -109,7 +109,7 @@ def explain(cfg, question: str) -> str:
     try:
         r = requests.post(f"{cfg.ollama_url}/api/chat", timeout=cfg.request_timeout, json={
             "model": cfg.model, "stream": False, "keep_alive": getattr(cfg, "keep_alive", "30m"),
-            "options": {"temperature": 0.2, "num_predict": 160},
+            "options": {"temperature": 0.2, "num_predict": 160, "num_ctx": getattr(cfg, "num_ctx", 8192)},
             "messages": [{"role": "system", "content":
                           "You explain the state of the user's Windows PC from the FACTS given. Use only "
                           "the facts; never invent. Plain spoken English, 2-3 short sentences, no lists. "
