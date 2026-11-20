@@ -58,6 +58,8 @@ relies on espeak-ng.
 |---|---|---|
 | agent-browser 0.43.0 (Vercel Labs) | Apache-2.0 | https://github.com/vercel-labs/agent-browser - pinned by SHA-256, run as a separate program |
 | websockets 15 | BSD-3-Clause | https://github.com/python-websockets/websockets - client for agent-browser's live stream |
+| lxml 6 / lxml_html_clean | BSD-3-Clause | https://lxml.de - HTML parsing of search results and pages |
+| trafilatura 2 | Apache-2.0 | https://github.com/adbar/trafilatura - main-text extraction of research pages |
 | Chrome for Testing 158 headless shell (Google) | Chromium license (BSD-3-Clause + third-party notices) | downloaded from Google's Chrome for Testing service, MD5-checked |
 | EasyList / EasyPrivacy | GPL-3.0+ / CC BY-SA 3.0+ | downloaded at runtime, not bundled |
 | Phishing.Database | MIT | downloaded at runtime |

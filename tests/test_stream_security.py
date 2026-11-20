@@ -131,7 +131,9 @@ class StreamSecurityTests(unittest.TestCase):
             self.assertTrue(self.hold.is_set(), f"{label}: task must be paused")
             self.assertTrue(wait_for(lambda: not self.c.browser_running, 10), f"{label}: browser not discarded")
             b = self.c.foreign_clients[0]
-            self.assertEqual(b["pid"], p.pid)
+            from localpilot.agent_browser.jobs import descendants
+            # a venv's python.exe is a launcher: the real interpreter is its child
+            self.assertIn(b["pid"], {p.pid} | {d for d, _ in descendants(p.pid)})
             self.assertTrue(any(e["kind"] == "foreign client" for e in self.c.snapshot()["events"]))
             self.assertIsNone(self.c.stream_endpoint())
         finally:
