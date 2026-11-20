@@ -82,6 +82,12 @@ class Config:
     vision_num_predict: int = 160      # cap generated tokens/step (the Thought is long -> slow)
     vision_terse: bool = True          # ask for a one-sentence Thought (fewer tokens = faster)
     vision_keep_alive: str = "15m"     # keep the model warm in VRAM between steps/runs
+    # Seeing (localpilot/see.py): Windows' built-in OCR + a local vision model for "read this",
+    # "analyze this image", image files. Empty see_model = use vision_model (UI-TARS).
+    see_enabled: bool = True
+    see_model: str = ""
+    see_keep_alive: str = "3m"         # free the vision model's memory soon after (Qwen stays loaded)
+    see_max_side: int = 1280
     vision_max_steps: int = 14         # step cap for the vision backend (steps are costly)
     vision_stop_on_repeat: int = 2     # stop after this many identical no-progress actions
 

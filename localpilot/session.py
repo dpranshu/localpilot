@@ -5,6 +5,7 @@ one running task -- never two assistants that don't know about each other.
 
 Routing (decided before anything else, so "stop" is never stuck behind a busy model):
   control  "stop", "cancel", "wait, don't change that file"  -> halt speech + task NOW
+  see      "read this error" / "analyze this image" / a .png path -> OCR (+ local vision model)
   inspect  "what's happening on my computer?"                -> read real PC state, explain
   else     brain.think -> answer / chat / command (plan -> act -> verify -> report)
 
@@ -16,7 +17,7 @@ from __future__ import annotations
 import re
 import threading
 
-from . import assistant, inspect_pc
+from . import assistant, inspect_pc, see
 
 _CONTROL = re.compile(
     r"^\s*(?:oh\s+|no\s+|hey\s+|okay\s+|ok\s+)?(stop|cancel|abort|halt|wait|hold\s+on|hang\s+on|pause|"
@@ -152,7 +153,13 @@ class Session:
         reply = ""
         try:
             from .research import router as _router
-            if inspect_pc.is_inspect(text):
+            if getattr(self.cfg, "see_enabled", True) and (see.image_path_in(text) or see.wants_screen(text)):
+                self._emit("plan", {"intent": "see", "thought": "Looking at it - on this PC only.",
+                                    "reply": "", "steps": []})
+                reply = see.explain(self.cfg, text)
+                self._emit("say", {"text": reply})
+                self._emit("done", {"text": reply, "ok": True})
+            elif inspect_pc.is_inspect(text):
                 self._emit("plan", {"intent": "inspect", "thought": "Looking at what's actually on your PC.",
                                     "reply": "", "steps": []})
                 reply = inspect_pc.explain(self.cfg, text)
