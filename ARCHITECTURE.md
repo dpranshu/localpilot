@@ -632,3 +632,91 @@ typed and spoken turns sharing one session: 4/4.
   before it is ready waits and is then transcribed.
 
 Regression: 148 unit tests, voice scenarios A–F 6/6, text tasks 41/41 with 0 false claims.
+
+## Research browser: Vercel agent-browser, the only browser backend (v1.2.0)
+
+```
+question ─▶ Session: control → inspect → RESEARCH (router rules, or Qwen's "research" intent) → brain
+                                    │
+                    research/engine.py: plan → search → read → evidence → verify → answer [n]
+                                    │  (Qwen: plan, per-source notes, answer; page text fenced as untrusted)
+                    agent_browser/controller.py (one owner; panel reads snapshot())
+                                    │
+                    abengine.py: agent-browser 0.43.0 CLI (SHA-256 pinned) + Chrome for Testing
+                                 headless shell, ALL traffic through GuardProxy
+```
+
+- **One backend.** The Playwright engine and the HTTP-first reader were removed. If agent-browser can't run,
+  browsing fails visibly; nothing falls back and nothing is invented.
+- **Restricted actions.** Allow-list of commands *and* sub-commands: open (URL-gated), get url/title/html/text,
+  snapshot, click (**links only**, refs from the latest snapshot), scroll, back/forward/reload, tabs,
+  screenshot, close, wait, stream disable/status. No eval, typing, filling, keys, find, upload, download,
+  cookies, storage, network, auth, connect, dashboard, chat. Qwen never gets a shell.
+- **Isolation.** Its own Chrome for Testing (never the user's Brave/Edge/Chrome or their profiles); inherited
+  `AGENT_BROWSER_*` settings stripped; fresh temp profile per session; Chromium sandbox on; file access off;
+  the input-capable live stream disabled (it has no authentication); session files deleted on close.
+- **Network guard (recovered Phase 1 code).** Private network / localhost / metadata IPs / DNS rebinding
+  refused (resolve once, pin IP); redirects re-checked; phishing list; EasyList ad/tracker hosts; on plain HTTP
+  also full-URL EasyList rules and no POST. Known limit: first-party ad paths over HTTPS can't be blocked
+  without decrypting traffic (not done); the extractor drops ad blocks from evidence.
+- **Downloads** quarantined and deleted unopened; **popups** closed; **forms** can't be submitted.
+- **Resources (measured).** Headless shell: idle ~41 MB, peak ~150 MB, 5 processes, median read ~1.3 s,
+  ~55 ms per preview screenshot; hard memory budget per profile (Windows job, kill-on-close: no orphans
+  even if LocalPilot crashes). Starts only for a task, closes when idle. Eco also disables images.
+- **Search.** Bing web / Bing News (real results pages, nothing typed), GitHub repository search for repos,
+  Wikipedia as the fallback. Tested and rejected for automated use: DuckDuckGo (CAPTCHA), Brave Search
+  (script-only), Mojeek/Startpage/Ecosia (block automated browsers). CAPTCHAs and Bing's disguised
+  "unrelated results" pages are never solved or evaded: LocalPilot reports them and uses the fallback.
+  Polite spacing between Bing searches.
+- **Honesty rules.** Off-topic results are never read; citations must point to pages actually opened
+  (others removed); no evidence → "I couldn't verify this online"; old sources for a "latest" question →
+  a warning; answer language follows the question.
+- **Live view.** Compact card in the main window (task, site, action, sources, security, Pause/Stop/Expand);
+  expanded view shows real screenshots of the same session at 0.5–2 FPS, only while visible.
+
+### Live view: Picture-in-Picture and expanded (agent-browser's official stream)
+
+* `agent_browser/viewer.py` consumes agent-browser's **own** WebSocket viewport stream of the SAME
+  session Qwen drives (frames, url, tabs, status, console, command/result activity). Nothing is
+  re-rendered; no second Chromium; the Next.js dashboard is NOT embedded (it needs a Chromium renderer
+  and is a control surface: chat, new sessions, storage).
+* **PiP** (default; opens when research starts): compact, draggable, resizable, optional always-on-top;
+  live page, current action, Pause/Resume, Stop, Expand. **Expanded**: large live view + Activity,
+  Console, Sources, Security, Session tabs; Take Control; back to PiP. Only one is open at a time.
+* The stream is ON only while a viewer is open (`viewer_attach/detach`), re-applied after a browser
+  recycle, re-enabled after a dropped connection (`stream_lost`). `stream enable` is not on the
+  command allow-list: only `set_stream()` can turn it on.
+* View-only by default. **Take Control** pauses the task, asks for explicit confirmation, then gets a
+  one-time grant from the controller; input is forwarded only while that grant is current AND the agent
+  can't act (paused / no task). Giving control back, Stop, or a foreign client revokes it; the task stays
+  paused until Resume / "continue". Screenshots are only a fallback when the stream is down.
+
+#### Local endpoint security (verified against agent-browser 0.43.0)
+
+agent-browser exposes UNAUTHENTICATED loopback TCP endpoints; none can be bound privately or given a
+token through a supported option:
+
+| endpoint | when | what a local client can do |
+|---|---|---|
+| daemon command port | whole browser lifetime | any daemon action (CLI protocol) |
+| Chrome DevTools port (`--remote-debugging-port=0`) | whole browser lifetime | full CDP control |
+| stream server (WS + HTTP) | only while a viewer is open | `input_*` -> raw CDP input (no policy); `/api/command` relay (Origin check is forgeable by non-browsers); `/api/sessions` |
+
+Web pages in the user's normal browser are refused by upstream's Origin check (WebSocket 403) and a
+cross-protocol POST to the daemon port produced no command (tested).
+
+LocalPilot's boundary:
+1. **Daemon action policy, default deny** (`POLICY_ALLOW`, protocol names). Enforced by the daemon for
+   every client: evaluate / fill / type / press / upload / download / cookies / storage / state /
+   network are denied even through the daemon port or `/api/command`. (The previous deny-list used CLI
+   names such as `eval` and denied nothing.)
+2. **Port guard** (`portguard.py`): every ~100 ms, any TCP client of a port listened on by a process in
+   LocalPilot's job (daemon, Chrome, stream), from a process outside that job, pauses the task, revokes
+   control, discards the browser (all its ports close) and logs a "foreign client" security event.
+   It detects and contains; it does NOT prevent a foreign client's first messages (measured: one
+   injected click landed before containment).
+3. **In-process viewer**: the PiP / expanded windows are LocalPilot's only stream consumer and listen on
+   nothing; there is no second socket to authenticate.
+* Windows: LocalPilot starts agent-browser's daemon itself with a hidden console (`_spawn_daemon`).
+  Upstream starts it detached, so the console-program headless shell would otherwise open a visible
+  console window on the user's desktop.

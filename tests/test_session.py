@@ -34,7 +34,7 @@ class SessionTests(unittest.TestCase):
     def says(self):
         return [d["text"] for k, d in self.events if k == "say"]
 
-    def slow_task(self, text, cfg, on_event, prefs, convo):
+    def slow_task(self, text, cfg, on_event, prefs, convo, **kw):
         """Pretend task: 'acts' every 50 ms and checks the stop flag before each action,
         like the real agent loop does (_check_stop before every action)."""
         self.actions_done = 0
@@ -67,7 +67,7 @@ class SessionTests(unittest.TestCase):
 
     def test_text_and_voice_share_one_conversation(self):
         seen = []
-        def fake(text, cfg, on_event, prefs, convo):
+        def fake(text, cfg, on_event, prefs, convo, **kw):
             seen.append(list(convo)); return f"reply to {text}"
         with patch.object(S.assistant, "handle", side_effect=fake):
             self.s.submit("my name is Pranshu", "text"); self.s.wait(2)
@@ -83,7 +83,7 @@ class SessionTests(unittest.TestCase):
         self.assertIn("You're in Notepad.", self.says())
 
     def test_progress_is_spoken_for_multi_step_plans(self):
-        def fake(text, cfg, on_event, prefs, convo):
+        def fake(text, cfg, on_event, prefs, convo, **kw):
             on_event("step", {"i": 1, "n": 2, "step": "Open Brave"})
             on_event("step", {"i": 2, "n": 2, "step": "Search YouTube for lofi"})
             return "done"

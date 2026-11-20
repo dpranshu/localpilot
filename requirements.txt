@@ -3,6 +3,8 @@ comtypes>=1.2.0
 requests>=2.31.0
 pillow>=10.0.0
 pystray>=0.19.5
+# live view of the research browser (agent-browser's official stream) -- BSD-3-Clause
+websockets>=15.0
 # voice (all MIT / Apache / BSD; FFmpeg inside PyAV is LGPL -> fine in the one-folder build)
 faster-whisper>=1.2.1
 sounddevice>=0.5.6

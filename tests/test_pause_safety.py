@@ -93,7 +93,7 @@ class SessionPauseTests(unittest.TestCase):
     def says(self):
         return [d["text"] for k, d in self.events if k == "say"]
 
-    def fake_task(self, text, cfg, on_event, prefs, convo):
+    def fake_task(self, text, cfg, on_event, prefs, convo, **kw):
         """'Acts' every 30 ms, checking pause/stop before each action like the real agent."""
         self.actions = 0
         for _ in range(400):

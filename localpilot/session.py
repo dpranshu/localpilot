@@ -151,15 +151,20 @@ class Session:
         self._emit("busy", {"busy": True, "task": text})
         reply = ""
         try:
+            from .research import router as _router
             if inspect_pc.is_inspect(text):
                 self._emit("plan", {"intent": "inspect", "thought": "Looking at what's actually on your PC.",
                                     "reply": "", "steps": []})
                 reply = inspect_pc.explain(self.cfg, text)
                 self._emit("say", {"text": reply})
                 self._emit("done", {"text": reply, "ok": True})
+            elif getattr(self.cfg, "research_enabled", True) and _router.wants_research(text):
+                reply = self._research(text, _router.mode_for(text, getattr(self.cfg, "research_mode", "quick")))
             else:
                 prefs = self.memory.preferences() if (self.memory and self.cfg.use_memory) else ""
-                reply = assistant.handle(text, self.cfg, self._relay, prefs, list(self.conversation))
+                research = (lambda t: self._research(t, _router.mode_for(t, getattr(self.cfg, "research_mode", "quick"))))                     if getattr(self.cfg, "research_enabled", True) else None
+                reply = assistant.handle(text, self.cfg, self._relay, prefs, list(self.conversation),
+                                         research=research)
         except Exception as e:
             reply = f"Something went wrong: {e}"
             self._emit("say", {"text": reply}); self._emit("done", {"text": reply, "ok": False})
@@ -167,6 +172,41 @@ class Session:
             self.cfg.hold_event.clear()            # the task is over; nothing left to pause
             self._remember(text, reply, source)
             self._emit("busy", {"busy": False})
+
+    # ---------- research (agent-browser + Qwen) ----------
+    @property
+    def browser(self):
+        """The research browser controller (one per session; Chromium starts only when needed)."""
+        if getattr(self, "_browser", None) is None:
+            from .agent_browser.controller import BrowserController
+            self._browser = BrowserController(self.cfg.stop_event, self.cfg.hold_event,
+                                              profile=getattr(self.cfg, "browser_profile", "balanced"),
+                                              on_change=lambda: self._emit("browser", {}))
+        return self._browser
+
+    def _research(self, text: str, mode: str) -> str:
+        from .research import engine as _eng, router as _router
+        q = _router.clean_question(text)
+        start = {"quick": "Let me look that up.", "research": "Researching that now.",
+                 "deep": "Starting deep research. This takes a few minutes."}.get(mode, "Let me look that up.")
+        self._emit("plan", {"intent": "research", "thought": f"Needs current information - {mode} research "
+                            "in LocalPilot's own browser.", "reply": start, "steps": [], "mode": mode})
+        self._emit("say", {"text": start})
+        eng = _eng.ResearchEngine(self.cfg, self.browser, lambda k, d: self._emit("research_" + k, d))
+        result = eng.run(q, mode)
+        self.last_research = result
+        self._emit("research_done", {"result": result})
+        if result.ok:
+            self._emit("say", {"text": result.spoken})
+        else:
+            self._emit("say", {"text": result.spoken})
+        self._emit("done", {"text": result.answer, "ok": result.ok})
+        return result.answer
+
+    def shutdown(self):
+        b = getattr(self, "_browser", None)
+        if b is not None:
+            b.shutdown()
 
     def _relay(self, kind, data):
         if kind == "step" and data.get("n", 1) > 1:     # streaming progress for longer plans

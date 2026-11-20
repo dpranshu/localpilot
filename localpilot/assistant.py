@@ -24,9 +24,13 @@ def _why(final) -> str:
 
 
 def handle(text: str, cfg, on_event=lambda kind, data: None, preferences: str = "",
-           conversation: list | None = None) -> str:
+           conversation: list | None = None, plan: dict | None = None, research=None) -> str:
     on_event("thinking", {"text": text})
-    plan = brain.think(cfg, text, preferences, conversation)
+    plan = plan or brain.think(cfg, text, preferences, conversation)
+    if plan.get("intent") == "research":
+        if research is not None:                 # Qwen decided it needs live information
+            return research(text)
+        plan = dict(plan, intent="answer", reply="I'd need to look that up online, and research is turned off.")
     on_event("plan", plan)
     on_event("say", {"text": plan["reply"]})
     if plan["intent"] != "do" or not plan["steps"]:

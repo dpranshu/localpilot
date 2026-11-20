@@ -52,6 +52,18 @@ voice; LocalPilot then runs it as a *separate process* (`localpilot/piper_worker
 GPL-licensed file, excluded from the packaged build). Kokoro is no alternative here, because it also
 relies on espeak-ng.
 
+## Research browser (installed at first use, not bundled)
+
+| Component | License | Notes |
+|---|---|---|
+| agent-browser 0.43.0 (Vercel Labs) | Apache-2.0 | https://github.com/vercel-labs/agent-browser - pinned by SHA-256, run as a separate program |
+| websockets 15 | BSD-3-Clause | https://github.com/python-websockets/websockets - client for agent-browser's live stream |
+| Chrome for Testing 158 headless shell (Google) | Chromium license (BSD-3-Clause + third-party notices) | downloaded from Google's Chrome for Testing service, MD5-checked |
+| EasyList / EasyPrivacy | GPL-3.0+ / CC BY-SA 3.0+ | downloaded at runtime, not bundled |
+| Phishing.Database | MIT | downloaded at runtime |
+| trafilatura | Apache-2.0 | page main-text extraction |
+| lxml | BSD-3-Clause | results-page parsing |
+
 ## Runtime components installed separately (not bundled)
 
 | Component | License | Notes |

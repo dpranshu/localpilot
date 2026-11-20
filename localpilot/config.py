@@ -28,6 +28,11 @@ class Config:
     tts_engine: str = "kokoro"                    # kokoro (natural) | piper (optional) | windows
     tts_voice: str = "af_heart"                   # kokoro voice: af_heart, af_bella, af_nicole, bf_emma
     whisper_model: str = "base.en"                # "small.en" = more accurate, ~3x slower
+    research_enabled: bool = True                 # live questions -> research in the agent-browser
+    research_mode: str = "quick"                  # default mode: quick | research | deep
+    research_max_seconds: int = 0                 # 0 = the mode's own limit
+    research_max_pages: int = 0                   # 0 = the mode's own limit
+    browser_profile: str = "balanced"             # eco | balanced | performance
     hold_event: object = None                     # set while the user is speaking: actions wait
     memory_path: str = ""                         # "" = %APPDATA%\LocalPilot\memory.json
     user_context: str = ""                        # filled per run from memory (not a user knob)

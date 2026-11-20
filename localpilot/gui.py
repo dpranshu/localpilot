@@ -215,6 +215,7 @@ class App:
         self.status = tk.Label(self.root, text="Ready.", bg=BG, fg=SUBTLE,
                                font=("Segoe UI", 10), anchor="w")
         self.status.pack(fill="x", padx=10, pady=(4, 0))
+        self._build_browser_panel()
 
         # log
         lf = tk.Frame(self.root, bg=BG)
@@ -416,6 +417,52 @@ class App:
         self.set_status("Thinking…", "run")
         self.session.submit(text, "text")
 
+    # ---------- research browser (Vercel agent-browser) ----------
+    def _build_browser_panel(self):
+        """Compact card in this window + an expandable live view. They only SHOW the controller's
+        real state and call its methods; all security is enforced below them."""
+        try:
+            from .agent_browser import ui as abui, uisettings
+            self.ab_settings = uisettings.load()
+            self.ab_pal = abui.palette(self.ab_settings.get("theme", "dark"))
+            abui.apply_theme(self.root, self.ab_pal, abui.DARK)    # main window is built in DARK colours
+            ctl = self.session.browser                      # lazy: Chromium is NOT started here
+            ctl.apply_settings(self.ab_settings)
+            self.cfg.research_mode = self.ab_settings.get("research_mode", "quick")
+            self.cfg.research_max_pages = int(self.ab_settings.get("max_pages", 0) or 0)
+            self.cfg.research_max_seconds = int(self.ab_settings.get("task_timeout_s", 0) or 0)
+            from .agent_browser.viewer import LiveViewer   # agent-browser's official live stream
+            self.ab_workspace = LiveViewer(self.root, ctl, self.session, self.ab_pal, self.ab_settings)
+            self.ab_panel = abui.CompactPanel(self.root, ctl, self.session, self.ab_pal,
+                                              open_workspace=self._toggle_workspace,
+                                              open_settings=self._open_browser_settings)
+            self.ab_panel.pack(fill="x", padx=10, pady=(6, 0))
+            self.root.bind("<Control-Shift-B>", lambda e: self._toggle_workspace())
+            self.root.bind("<Control-Shift-b>", lambda e: self._toggle_workspace())
+        except Exception as e:                               # the app still works without the panel
+            self.ab_panel = self.ab_workspace = None
+            print("browser panel unavailable:", e)
+
+    def _toggle_workspace(self):
+        if self.ab_workspace is not None and self.ab_settings.get("preview_enabled", True):
+            self.ab_workspace.toggle()
+        elif self.ab_workspace is not None:
+            self.set_status("Live preview is turned off in the browser settings.", "info")
+
+    def _open_browser_settings(self):
+        from .agent_browser import ui as abui, uisettings
+
+        def saved(values):
+            self.ab_settings = values
+            uisettings.save(values)
+            self.session.browser.apply_settings(values)
+            self.ab_workspace.pip.settings = self.ab_workspace.big.settings = values
+            self.cfg.research_mode = values.get("research_mode", "quick")
+            self.cfg.research_max_pages = int(values.get("max_pages", 0) or 0)
+            self.cfg.research_max_seconds = int(values.get("task_timeout_s", 0) or 0)
+            self.set_status("Browser settings saved.", "ok")
+        abui.SettingsDialog(self.root, self.ab_settings, self.ab_pal, saved, self.session.browser)
+
     def _session_event(self, kind, data):
         """Session events (text AND voice turns) -> panel log + voice. Runs on worker threads."""
         if self.voice is not None:
@@ -439,6 +486,24 @@ class App:
             self.logq.put({"event": "_setup", "message": "Paused - say or type 'continue', or 'stop'."})
         elif kind == "resumed":
             self.logq.put({"event": "_setup", "message": "Continuing…"})
+        elif kind == "research_progress":
+            self.logq.put({"event": "_setup", "message": data.get("text", "")})
+        elif kind == "research_plan":
+            if self.ab_workspace is not None and self.ab_settings.get("preview_enabled", True):
+                self.root.after(0, lambda: self.ab_workspace.mode == "closed" and self.ab_workspace.show_pip())
+            qs = "; ".join(data.get("queries") or [])
+            self.logq.put({"event": "_note", "text": f"(research - {data.get('mode')}) searching: {qs}"})
+        elif kind == "research_done":
+            r = data["result"]
+            from .research.engine import sources_block
+            text = "\n" + r.answer.strip()
+            if r.evidence:
+                text += "\n\nSources (pages LocalPilot actually opened):\n" + sources_block(r.evidence)
+            if r.report_path:
+                text += f"\n\nFull report: {r.report_path}"
+            for w in r.warnings[:4]:
+                text += f"\n  ! {w}"
+            self.logq.put({"event": "_note", "text": text})
 
     def _voice_changed(self):
         self.cfg.tts_voice = self._voice_names.get(self.voice_pick.get(), "af_heart")
@@ -594,6 +659,10 @@ class App:
         except Exception:
             pass
         try:
+            self.session.shutdown()
+        except Exception:
+            pass
+        try:
             self.root.destroy()
         except Exception:
             pass
@@ -669,6 +738,11 @@ class App:
         except queue.Empty:
             pass
         self._animate_orb()
+        if getattr(self, "ab_panel", None) is not None and getattr(self.session, "_browser", None) is not None:
+            try:
+                self.ab_panel.refresh(self.session._browser.snapshot(), self.ab_pal)
+            except Exception:
+                pass
         try:
             self.root.after(60, self._drain)
         except Exception:
